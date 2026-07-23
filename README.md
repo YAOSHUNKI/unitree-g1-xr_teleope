@@ -63,7 +63,6 @@ sudo ip link set enp45s0 up
 python teleop_hand_and_arm.py \
  --input-mode=controller \
  --arm=G1_23 \
- --sim \
  --img-server-ip=192.168.123.164 \
  --display-mode=immersive \
  --network-interface enp45s0
