@@ -12,6 +12,30 @@ Unitree G1 + Isaac Sim / IsaacLab 用のconda環境として、unitree_sim_env�
 conda create -n unitree_sim_env python=3.11 -y
 conda activate unitree_sim_env
 ```
+## 2. PyTorch / torchvision のインストール
+PyTorchは、CUDA 12.8用のwheelを使用する。
+```code
+pip install torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu128
+```
+補足：
+nvidia-smi上のCUDA Version表示は13.0だが、PyTorch側はtorch==2.7.0+cu128としてCUDA 12.8用wheelを使用している。
+
+## 3. Isaac Sim 5.1.0 のインストール
+Isaac Simは、pip版のisaacsim[all,extscache]==5.1.0を使用する。
+```code
+python -m pip install --upgrade pip
+pip install "isaacsim[all,extscache]==5.1.0" --extra-index-url https://pypi.nvidia.com
+```
+
+初回importまたは初回起動時にOmniverse KitのEULA同意が必要になる場合がある。
+その場合のみ、以下を一時的に指定して実行する。
+```code
+export OMNI_KIT_ACCEPT_EULA=yes
+```
+
+補足：
+OMNI_KIT_ACCEPT_EULA=yesは初回実行時の同意用として一時的に使用した。
+
 ## 5.起動手順
 ### ローカルPC
 python teleop_hand_and_arm.py \
