@@ -52,6 +52,7 @@ OMNI_KIT_ACCEPT_EULA=yesは初回実行時の同意用として一時的に使�
 ### ローカルPC
 ```code
 source ~/miniconda3/etc/profile.d/conda.sh
+conda activate tv
 ```
 ```code
 sudo ip addr flush dev enp45s0
@@ -66,6 +67,11 @@ python teleop_hand_and_arm.py \
  --img-server-ip=192.168.123.164 \
  --display-mode=immersive \
  --network-interface enp45s0
+```
+### G1側PC
+```code
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate teleimager
 ```
 
 
