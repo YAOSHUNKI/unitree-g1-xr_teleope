@@ -51,6 +51,11 @@ OMNI_KIT_ACCEPT_EULA=yesは初回実行時の同意用として一時的に使�
 ## 5.起動手順
 ### ローカルPC
 ```code
+sudo ip addr flush dev enp45s0
+sudo ip addr add 192.168.123.200/24 dev enp45s0
+sudo ip link set enp45s0 up
+```
+```code
 python teleop_hand_and_arm.py \
  --input-mode=controller \
  --arm=G1_23 \
