@@ -33,11 +33,24 @@ pip install "isaacsim[all,extscache]==5.1.0" --extra-index-url https://pypi.nvid
 export OMNI_KIT_ACCEPT_EULA=yes
 ```
 
+## 4. unitree_sim_isaaclab の取得
+ホームディレクトリ直下にunitree_sim_isaaclabを配置する。
+```code
+cd ~
+git clone https://github.com/unitreerobotics/unitree_sim_isaaclab.git
+cd unitree_sim_isaaclab
+git submodule update --init --depth 1
+```
+
+補足：
+公式手順ではSSH形式のcloneが示されているが、SSH鍵設定を前提にしないため、今回はHTTPS形式でcloneした。
+
 補足：
 OMNI_KIT_ACCEPT_EULA=yesは初回実行時の同意用として一時的に使用した。
 
 ## 5.起動手順
 ### ローカルPC
+```code
 python teleop_hand_and_arm.py \
  --input-mode=controller \
  --arm=G1_23 \
@@ -45,5 +58,6 @@ python teleop_hand_and_arm.py \
  --img-server-ip=192.168.123.164 \
  --display-mode=immersive \
  --network-interface enp45s0
+```
 
 
