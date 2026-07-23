@@ -8,11 +8,10 @@ unitree_sim_isaaclab 公式リポジトリ
 https://github.com/unitreerobotics/unitree_sim_isaaclab/tree/main
 
 Unitree G1 + Isaac Sim / IsaacLab 用のconda環境として、unitree_sim_envを作成する。
-'''
+```code
 conda create -n unitree_sim_env python=3.11 -y
 conda activate unitree_sim_env
-'''
-
+```
 ## 5.起動手順
 ### ローカルPC
 python teleop_hand_and_arm.py \
