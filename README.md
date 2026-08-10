@@ -103,11 +103,11 @@ pip install -e .
 ```code
 pip install numpy==1.26.4
 ```
-補足: unitree_sdk2_pythonのインストール後、NumPyが2系へ上がったため、numpy==1.26.4へ戻 した。
+補足: unitree_sdk2_pythonのインストール後、NumPyが2系へ上がったため、numpy==1.26.4へ戻した。
 補足:
-pip install -e .およびpip install numpy==1.26.4の後に、pipのdependency resolverに 関する警告が表示された。
-内容としては、Isaac Sim、IsaacLab、dex-retargeting、rl-games、opencv-pythonなどの要 求バージョンと一部のパッケージバージョンが一致していないというものであった。
-ただし、今回の段階では、追加でclick、psutil、typing_extensions、torchaudioなどを個 別に固定することはしなかった。 理由は、今後のrequirements.txtや実機接続関連の依存関係と競合する可能性があるためで ある。
+pip install -e .およびpip install numpy==1.26.4の後に、pipのdependency resolverに関する警告が表示された。
+内容としては、Isaac Sim、IsaacLab、dex-retargeting、rl-games、opencv-pythonなどの要求バージョンと一部のパッケージバージョンが一致していないというものであった。
+ただし、今回の段階では、追加でclick、psutil、typing_extensions、torchaudioなどを個別に固定することはしなかった。 理由は、今後のrequirements.txtや実機接続関連の依存関係と競合する可能性があるためである。
 現時点では、NumPyを2系から1.26.4へ戻すことを優先した。
 
 ## 9.requirements.txt のインストール
