@@ -159,7 +159,8 @@ unitree_sim_envはIsaac Sim / IsaacLab用の環境であり、Isaac Sim 5.1.0に
 xr_teleoperateをホームディレクトリ直下に取得し、submoduleを初期化する。
 ```code
 cd ~
-git clone https://github.com/unitreerobotics/xr_teleoperate.git cd xr_teleoperate
+git clone https://github.com/unitreerobotics/xr_teleoperate.git
+cd xr_teleoperate
 git submodule update --init --depth 1
 ```
 
