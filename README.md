@@ -87,8 +87,173 @@ cd build
 cmake .. -DCMAKE_INSTALL_PREFIX=../install
 cmake --build . --target install
 ```
-## 5.起動手順
-### ローカルPC
+
+## 8.unitree_sdk2_python のインストール 
+CycloneDDSをビルドした後、環境変数CYCLONEDDS_HOMEとCMAKE_PREFIX_PATHを指定して、unitree_sdk2_pythonをインストールする。
+```code
+cd ~/unitree_sim_isaaclab/unitree_sdk2_python
+```
+```code
+export CYCLONEDDS_HOME="$HOME/cyclonedds/install"
+export CMAKE_PREFIX_PATH="$CYCLONEDDS_HOME:${CMAKE_PREFIX_PATH}"
+```
+```code
+pip install -e .
+```
+```code
+pip install numpy==1.26.4
+```
+補足: unitree_sdk2_pythonのインストール後、NumPyが2系へ上がったため、numpy==1.26.4へ戻 した。
+補足:
+pip install -e .およびpip install numpy==1.26.4の後に、pipのdependency resolverに 関する警告が表示された。
+内容としては、Isaac Sim、IsaacLab、dex-retargeting、rl-games、opencv-pythonなどの要 求バージョンと一部のパッケージバージョンが一致していないというものであった。
+ただし、今回の段階では、追加でclick、psutil、typing_extensions、torchaudioなどを個 別に固定することはしなかった。 理由は、今後のrequirements.txtや実機接続関連の依存関係と競合する可能性があるためで ある。
+現時点では、NumPyを2系から1.26.4へ戻すことを優先した。
+
+## 9.requirements.txt のインストール
+unitree_sim_isaaclabで必要なPythonパッケージをインストールする。
+```code
+cd ~/unitree_sim_isaaclab
+```
+```code
+pip install -r requirements.txt
+```
+補足: この段階でもpipの依存関係警告が出る可能性があるが、実際にインストール処理が途中で 停止していなければ、いったん次の手順へ進む方針とした。
+
+## 10.assetsの取得
+unitree_sim_isaaclabの実行に必要なロボットモデルや環境モデルなどのassetsを取得する。
+```code
+conda activate unitree_sim_env
+cd ~/unitree_sim_isaaclab
+```
+```code
+sudo apt update
+sudo apt install -y git-lfs
+```
+```code
+. fetch_assets.sh
+```
+
+## 11.teleimagerのインストール
+```code
+cd ~/unitree_sim_isaaclab/teleimager
+```
+```code
+pip install -e . --no-deps
+```
+
+## 12.tv環境の作成
+参考ソース:
+xr_teleoperate 公式README
+https://github.com/unitreerobotics/xr_teleoperate/blob/main/README.md
+Meta Quest 3接続および遠隔操作側の環境として、tv環境を作成する
+```code
+conda create -n tv python=3.10 pinocchio=3.1.0 numpy=1.26.4 -c conda-forge -y
+conda activate tv
+```
+補足:
+unitree_sim_envはIsaac Sim / IsaacLab用の環境であり、Isaac Sim 5.1.0に合わせてPython3.11を使用した。
+一方、tv環境はxr_teleoperate / televuer / teleimager / Unitree SDK用の環境であり、unitre e_sim_envとPythonバージョンを合わせる必要はない。 そのため、tv環境は公式READMEに合わせてPython 3.10とした。
+
+## 13.xr_teleoperateの取得
+xr_teleoperateをホームディレクトリ直下に取得し、submoduleを初期化する。
+```code
+cd ~
+git clone https://github.com/unitreerobotics/xr_teleoperate.git cd xr_teleoperate
+git submodule update --init --depth 1
+```
+
+## 14.teleimagerとtelevuerのインストール
+xr_teleoperate側のsubmoduleとして含まれるteleimagerとtelevuerをインストールする。
+```code
+cd ~/xr_teleoperate/teleop/teleimager
+pip install -e . --no-deps
+```
+```code
+cd ~/xr_teleoperate/teleop/televuer
+pip install -e .
+```
+補足: teleimagerは公式READMEに合わせて--no-deps付きでインストールした。 
+そのため、以下のような依存関係警告が表示された。
+```code
+teleimager 1.5.0 requires pyyaml, which is not installed.
+teleimager 1.5.0 requires pyzmq, which is not installed.
+```
+これは--no-depsで依存関係を同時に入れなかったために出た警告である。 
+次の手順でpyyamlとpyzmqをインストールするため、この段階では問題ない。
+
+## 15.pyyaml/pysmq/params_protoのインストール
+teleimagerの依存関係として必要になるpyyamlとpyzmqをインストールした。
+また、params_protoのバージョンによる不具合があったため、params_proto==2.13.2に固定した。
+```code
+pip install pyyaml pyzmq
+pip install params_proto==2.13.2
+```
+
+## 16.SSL証明書の作成と8012番ポートの許可
+Meta Quest 3からWebXR接続するため、自己署名証明書を作成し、~/.config/xr_teleoper ate/に配置する。
+また、8012番ポートを許可する。
+```code
+cd ~/xr_teleoperate/teleop/televuer
+```
+```code
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout key.pem -out cert.pem
+```
+```code
+sudo ufw allow 8012
+```
+```code
+mkdir -p ~/.config/xr_teleoperate/
+cp cert.pem key.pem ~/.config/xr_teleoperate/
+```
+補足: openssl実行時に入力を求められるが、すべてEnterでスキップした。
+
+## 17.tv環境側のunitree_sdk2_pythonのインストール
+tv環境側でも、Unitree SDKをインストールする。これはG1やDex3とのDDS通信に必要になる。
+```code
+cd ~
+git clone https://github.com/unitreerobotics/unitree_sdk2_python.git
+```
+```code
+cd unitree_sdk2_python
+```
+```code
+export CYCLONEDDS_HOME="$HOME/cyclonedds/install"
+export CMAKE_PREFIX_PATH="$CYCLONEDDS_HOME:${CMAKE_PREFIX_PATH}"
+```
+```code
+pip install -e .
+```
+
+## 18.不足依存の追加
+起動時に不足しているPythonモジュールがいくつか見つかったため、必要なものを追加インストールした。
+```code
+pip install meshcat
+pip install matplotlib
+pip install rerun-sdk==0.20.1
+pip install sshkeyboard
+```
+補足: 
+rerunはrerun-sdkで提供される。
+最新版のrerun-sdkを入れるとNumPy 2系へ寄る可能性があったため、rerun-sdk==0.20.1 に固定した。
+
+補足: 
+公式READMEにはこれらの追加依存が明示されていないが、teleop_hand_and_arm.py実行時に不足が判明したため、必要な推定手順として追加インストールした。
+
+## 19.dex-retargetingのインストール
+Dex3 + hand modeでは、手指のretargeting処理にdex-retargetingが必要になる。 
+そのため、xr_teleoperate内のdex-retargetingをPythonパッケージとしてインストールした。
+```code
+cd ~/xr_teleoperate/teleop/robot_control/dex-retargeting
+```
+```code
+pip install -e .
+```
+補足:
+Dex3 + hand modeを使用する場合、teleop/robot_control/hand_retargeting.py内でdex_r etargetingを使用するため、この手順が必要になる。
+
+# 起動手順
+## ローカルPC
 ```code
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate tv
@@ -106,7 +271,7 @@ python teleop_hand_and_arm.py \
  --display-mode=immersive \
  --network-interface enp45s0
 ```
-### G1側PC
+## G1側PC
 ```code
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate teleimager
