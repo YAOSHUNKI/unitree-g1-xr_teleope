@@ -32,6 +32,8 @@ pip install "isaacsim[all,extscache]==5.1.0" --extra-index-url https://pypi.nvid
 ```code
 export OMNI_KIT_ACCEPT_EULA=yes
 ```
+補足：
+OMNI_KIT_ACCEPT_EULA=yesは初回実行時の同意用として一時的に使用した。
 
 ## 4. unitree_sim_isaaclab の取得
 ホームディレクトリ直下にunitree_sim_isaaclabを配置する。
@@ -45,9 +47,46 @@ git submodule update --init --depth 1
 補足：
 公式手順ではSSH形式のcloneが示されているが、SSH鍵設定を前提にしないため、今回はHTTPS形式でcloneした。
 
-補足：
-OMNI_KIT_ACCEPT_EULA=yesは初回実行時の同意用として一時的に使用した。
+## 5. teleimager 設定ファイルの修正
+unitree_sim_isaaclab のsubmodule初期化後、公式手順に従って teleimager/cam_config_server.yaml を修正する。
 
+```code
+cd ~/unitree_sim_isaaclab
+sed -i 's/image_shape: \[.*\]/image_shape: [480, 640]/' teleimager/cam_config_server.yaml
+sed -i 's/type: .*/type: isaacsim/' teleimager/cam_config_server.yaml
+```
+
+## 6.IsaacLabのインストール
+IsaacLabは、~/unitree_sim_isaaclab/IsaacLab に配置する。
+```code
+cd ~/unitree_sim_isaaclab
+```
+```code
+git clone https://github.com/isaac-sim/IsaacLab.git
+```
+```code
+sudo apt install cmake build-essential
+```
+```code
+cd IsaacLab
+export OMNI_KIT_ACCEPT_EULA=yes
+./isaaclab.sh --install
+```
+
+## 7.Unitree SDK と CycloneDDS の準備
+Unitree SDKを使用するため、unitree_sdk2_pythonを取得する。 また、SDKインストール時にCycloneDDSが必要になるため、CycloneDDSをソースからビルドする。
+```code
+cd ~/unitree_sim_isaaclab
+git clone https://github.com/unitreerobotics/unitree_sdk2_python
+```
+```code
+cd ~
+git clone https://github.com/eclipse-cyclonedds/cyclonedds -b releases/0.10.x cd cyclonedds
+mkdir build install
+cd build
+cmake .. -DCMAKE_INSTALL_PREFIX=../install
+cmake --build . --target install
+```
 ## 5.起動手順
 ### ローカルPC
 ```code
