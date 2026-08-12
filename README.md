@@ -306,7 +306,7 @@ python -m teleimager.image_server --rs
 ```
 ### ターミナル2
 ```code
-tmux new -s img
+tmux new -s teleop
 ```
 ros:foxy(1) noetic(2) ?と聞かれるのでCtrl+c
 ```code
