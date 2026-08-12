@@ -321,13 +321,14 @@ ros:foxy(1) noetic(2) ?と聞かれるのでCtrl+c
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate tv
 ```
+ここのipはwlan0のipアドレス
 ```code
 cd ~/xr_teleoperate/teleop
 python teleop_hand_and_arm.py \
     --input-mode=controller \
     --arm G1_23 \
     --network-interface eth0 \
-    --img-server-ip 127.0.0.1 \
+    --img-server-ip 10.10.129.69 \
 ```
 ### questでアクセスするURL
 例
@@ -339,6 +340,7 @@ https://10.10.129.69:8012/?ws=wss://10.10.129.69:8012
 https://<調べたwlan0のipアドレス>:8012/?ws=wss://<調べたwlan0のipアドレス>:8012
 ```
 webの安全性の警告が出るが無視して開く \
-現状カメラ映像が取れていないのでpass troughで透過状態で運用する
+G1のRealSenceの映像を取得する場合はRealize visual \
+VRを透過させる場合はpass trough
 
 
