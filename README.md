@@ -304,11 +304,14 @@ cd ~/teleimager
 python -m teleimager.image_server --rs
 ```
 ### ターミナル2
-### ターミナル1
 ```code
 tmux new -s img
 ```
 ros:foxy(1) noetic(2) ?と聞かれるのでCtrl+c
+```code
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate teleimager
+```
 ```code
 cd ~/xr_teleoperate/teleop
 python teleop_hand_and_arm.py \
