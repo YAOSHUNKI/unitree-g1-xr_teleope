@@ -321,5 +321,11 @@ python teleop_hand_and_arm.py \
     --network-interface eth0 \
     --img-server-ip 127.0.0.1 \
 ```
+### questでアクセスするURL
+```code
+https://10.10.129.69:8012/?ws=wss://10.10.129.69:8012
+```
+webの安全性の警告が出るが無視して開く \
+現状カメラ映像が取れていないのでpass troughで透過状態で運用する
 
 
