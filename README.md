@@ -254,7 +254,8 @@ pip install -e .
 Dex3 + hand modeを使用する場合、teleop/robot_control/hand_retargeting.py内でdex_r etargetingを使用するため、この手順が必要になる。
 
 # 起動手順
-## ローカルPC
+## 有線 Ethernetによる接続
+### ローカルPC
 ```code
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate tv
@@ -272,7 +273,7 @@ python teleop_hand_and_arm.py \
  --display-mode=immersive \
  --network-interface enp45s0
 ```
-## G1側PC
+### G1側PC
 ```code
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate teleimager
@@ -282,5 +283,41 @@ cd ~/teleimager
 teleimager-server --rs
 ```
 
+## 無線 sshによる接続
+### ローカルPCからg1内のPCにssh接続
+内部PCのwlan0のipアドレスを確認
+```code
+ssh unitree@10.10.129.69
+```
+2つのターミナルで起動
+### ターミナル1
+```code
+tmux new -s img
+```
+ros:foxy(1) noetic(2) ?と聞かれるのでCtrl+c
+```code
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate teleimager
+```
+```code
+cd ~/teleimager
+python -m teleimager.image_server --rs
+```
+### ターミナル2
+### ターミナル1
+```code
+tmux new -s img
+```
+ros:foxy(1) noetic(2) ?と聞かれるのでCtrl+c
+```code
+cd ~/xr_teleoperate/teleop
+python teleop_hand_and_arm.py \
+    --input-mode=controller \
+    --arm G1_23 \
+    --ee dex3 \
+    --network-interface eth0 \
+    --img-server-ip 127.0.0.1 \
+    --ipc
+```
 
 
