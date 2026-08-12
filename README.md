@@ -284,10 +284,18 @@ teleimager-server --rs
 ```
 
 ## 無線 sshによる接続
+### 前提
+必ずG1とローカルPC（制御ノートPC）,questを同じwifiにつなぐこと
+
 ### ローカルPCからg1内のPCにssh接続
-内部PCのwlan0のipアドレスを確認
+内部PCのwlan0のipアドレスを確認 \
+例
 ```code
 ssh unitree@10.10.129.69
+```
+実際のcode
+```code
+ssh unitree@<調べたwlan0のipアドレス>
 ```
 ros:foxy(1) noetic(2) ?と聞かれるのでCtrl+c \
 2つのターミナルで起動
@@ -322,8 +330,13 @@ python teleop_hand_and_arm.py \
     --img-server-ip 127.0.0.1 \
 ```
 ### questでアクセスするURL
+例
 ```code
 https://10.10.129.69:8012/?ws=wss://10.10.129.69:8012
+```
+実際のcode(上記で調べたwlan0のipアドレスと同じ）
+```code
+https://<調べたwlan0のipアドレス>:8012/?ws=wss://<調べたwlan0のipアドレス>:8012
 ```
 webの安全性の警告が出るが無視して開く \
 現状カメラ映像が取れていないのでpass troughで透過状態で運用する
