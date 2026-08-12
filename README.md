@@ -298,7 +298,7 @@ tmux new -s img
 ros:foxy(1) noetic(2) ?と聞かれるのでCtrl+c
 ```code
 source ~/miniconda3/etc/profile.d/conda.sh
-conda activate teleimager
+conda activate tv
 ```
 ```code
 cd ~/teleimager
@@ -311,7 +311,7 @@ tmux new -s img
 ros:foxy(1) noetic(2) ?と聞かれるのでCtrl+c
 ```code
 source ~/miniconda3/etc/profile.d/conda.sh
-conda activate teleimager
+conda activate tv
 ```
 ```code
 cd ~/xr_teleoperate/teleop
