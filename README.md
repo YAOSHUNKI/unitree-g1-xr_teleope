@@ -320,7 +320,6 @@ python teleop_hand_and_arm.py \
     --arm G1_23 \
     --network-interface eth0 \
     --img-server-ip 127.0.0.1 \
-    --ipc
 ```
 
 
