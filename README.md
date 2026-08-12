@@ -285,7 +285,8 @@ teleimager-server --rs
 
 ## 無線 sshによる接続
 ### 前提
-必ずG1とローカルPC（制御ノートPC）,questを同じwifiにつなぐこと
+必ずG1とローカルPC（制御ノートPC）,questを同じwifiにつなぐこと \
+G1を立たせるときにL2+十字キー上(Locked Standing)のあとにR1+XでRegular Modeにする
 
 ### ローカルPCからg1内のPCにssh接続
 内部PCのwlan0のipアドレスを確認 \
@@ -321,7 +322,8 @@ ros:foxy(1) noetic(2) ?と聞かれるのでCtrl+c
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate tv
 ```
-ここのipはwlan0のipアドレス
+ここのipはwlan0のipアドレス \
+例
 ```code
 cd ~/xr_teleoperate/teleop
 python teleop_hand_and_arm.py \
@@ -329,8 +331,20 @@ python teleop_hand_and_arm.py \
     --motion \
     --arm G1_23 \
     --network-interface eth0 \
-    --img-server-ip 10.10.129.69 \
+    --img-server-ip 10.10.129.69 
 ```
+実際のcode(上記で調べたwlan0のipアドレスと同じ)
+```code
+cd ~/xr_teleoperate/teleop
+python teleop_hand_and_arm.py \
+    --input-mode=controller \
+    --motion \
+    --arm G1_23 \
+    --network-interface eth0 \
+    --img-server-ip <調べたwlan0のipアドレス> 
+```
+起動を確認したあとに"r"を入力すると制御準備完了
+
 ### questでアクセスするURL
 例
 ```code
