@@ -326,6 +326,7 @@ conda activate tv
 cd ~/xr_teleoperate/teleop
 python teleop_hand_and_arm.py \
     --input-mode=controller \
+    --motion \
     --arm G1_23 \
     --network-interface eth0 \
     --img-server-ip 10.10.129.69 \
