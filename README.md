@@ -289,6 +289,7 @@ teleimager-server --rs
 ```code
 ssh unitree@10.10.129.69
 ```
+ros:foxy(1) noetic(2) ?と聞かれるのでCtrl+c
 2つのターミナルで起動
 ### ターミナル1
 ```code
