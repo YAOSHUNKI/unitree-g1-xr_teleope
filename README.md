@@ -318,7 +318,6 @@ cd ~/xr_teleoperate/teleop
 python teleop_hand_and_arm.py \
     --input-mode=controller \
     --arm G1_23 \
-    --ee dex3 \
     --network-interface eth0 \
     --img-server-ip 127.0.0.1 \
     --ipc
