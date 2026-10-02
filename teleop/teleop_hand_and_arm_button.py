@@ -1,5 +1,7 @@
 import time
 import argparse
+import socket
+import struct
 from multiprocessing import Value, Array, Lock
 import threading
 import logging_mp
@@ -17,8 +19,7 @@ from televuer import TeleVuerWrapper
 from teleop.robot_control.robot_arm import G1_29_ArmController, G1_29_Arm_Internal_Dex1_Controller, G1_23_ArmController, H1_2_ArmController, H1_ArmController, H2_ArmController, R1_A5_ArmController, R1_A7_ArmController
 from teleop.robot_control.robot_arm_ik import G1_29_ArmIK, G1_23_ArmIK, H1_2_ArmIK, H1_ArmIK, H2_ArmIK, R1_A5_ArmIK, R1_A7_ArmIK
 from teleimager.image_client import ImageClient
-from teleop.utils.episode_writer import E
-pisodeWriter
+from teleop.utils.episode_writer import EpisodeWriter
 from teleop.utils.ipc import IPC_Server
 from teleop.utils.motion_switcher import MotionSwitcher, LocoClientWrapper
 from sshkeyboard import listen_keyboard, stop_listening
@@ -94,6 +95,10 @@ if __name__ == '__main__':
     parser.add_argument('--task-goal', type = str, default = 'pick up cube.', help = 'task goal for recording at json file')
     parser.add_argument('--task-desc', type = str, default = 'task description', help = 'task description for recording at json file')
     parser.add_argument('--task-steps', type = str, default = 'step1: do this; step2: do that;', help = 'task steps for recording at json file')
+    # button-bridge (UDP) parameters
+    parser.add_argument('--button-bridge-host', type=str, default='127.0.0.1', help='UDP host to send controller button states to (ROS bridge)')
+    parser.add_argument('--button-bridge-port', type=int, default=9870, help='UDP port to send controller button states to (ROS bridge)')
+    parser.add_argument('--button-bridge-disable', action='store_true', help='Disable sending controller button states over UDP')
 
     args = parser.parse_args()
     logger_mp.debug(f"args: {args}")
@@ -107,6 +112,20 @@ if __name__ == '__main__':
             ChannelFactoryInitialize(1, networkInterface=args.network_interface)
         else:
             ChannelFactoryInitialize(0, networkInterface=args.network_interface)
+
+        # ---- button-bridge UDP socket (send B / Y button states to an external ROS bridge) ----
+        # Payload format (little-endian, 2 bytes total):
+        #   '<??' = right_ctrl_bButton (B), left_ctrl_bButton (Y, labeled Y on hardware)
+        button_sock = None
+        BUTTON_FMT = '<??'
+        if not args.button_bridge_disable:
+            try:
+                button_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                button_sock.setblocking(False)
+                logger_mp.info(f"button-bridge UDP -> {args.button_bridge_host}:{args.button_bridge_port} (fmt={BUTTON_FMT} B,Y)")
+            except Exception as e:
+                logger_mp.error(f"Failed to open button-bridge UDP socket: {e}")
+                button_sock = None
 
         # ipc communication mode. client usage: see utils/ipc.py
         if args.ipc:
@@ -316,6 +335,18 @@ if __name__ == '__main__':
 
             # get xr's tele data
             tele_data = tv_wrapper.get_tele_data()
+
+            # ---- send B / Y button states over UDP (controller mode only) ----
+            if button_sock is not None and args.input_mode == "controller":
+                try:
+                    payload = struct.pack(
+                        BUTTON_FMT,
+                        bool(tele_data.right_ctrl_bButton),  # B (right)
+                        bool(tele_data.left_ctrl_bButton),   # Y (left; ctrl_bButton on left is labeled Y)
+                    )
+                    button_sock.sendto(payload, (args.button_bridge_host, args.button_bridge_port))
+                except Exception as e:
+                    logger_mp.debug(f"button-bridge send failed: {e}")
             if args.ee in ("dex3", "inspire_ftp", "inspire_dfx", "brainco")  and args.input_mode == "hand":
                 with left_hand_pos_array.get_lock():
                     left_hand_pos_array[:] = tele_data.left_hand_pos.flatten()
@@ -546,6 +577,12 @@ if __name__ == '__main__':
         except Exception as e:
             logger_mp.error(f"Failed to stop keyboard listener or ipc server: {e}")
         
+        try:
+            if button_sock is not None:
+                button_sock.close()
+        except Exception as e:
+            logger_mp.error(f"Failed to close button-bridge socket: {e}")
+
         try:
             if img_client is not None:
                 img_client.close()
