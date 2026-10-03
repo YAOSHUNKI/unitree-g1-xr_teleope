@@ -32,7 +32,8 @@ Vuerの現在の実装ではブラウザ時刻はWebXRハードウェアサン�
 - `browser_clock_sync_server.py`: QuestブラウザとXR PCの時計同期ページ
 - `clock_sync.py`: XR PCとロボットPCのUDP時計同期
 - `analyze_csv.py`: min/mean/p50/p95/p99/maxとsequence欠落を集計
-- `analyze_camera_csv.py`: カメラ遅延と欠落フレームを集計
+- `camera_latency_node.py`: Docker側のカメラ計測サーバー起動・CSV保存・集計（単体動作）
+- `analyze_camera_csv.py`: ホスト側でカメラCSVだけを集計する補助スクリプト
 - `send_test_packets.py`: XRを起動せず通信経路を確認するテスト送信器
 
 ## 1. 基本の時計同期
@@ -182,18 +183,22 @@ end_to_end_ms            2区間とも補正後
 
 ## カメラ映像遅延の計測
 
-コピー版teleimagerには、カメラフレーム取得直後からQuestブラウザでWebRTCフレームが表示処理へ渡るまでを計測する機能があります。通常運用では無効で、計測時だけ映像左上に448×16 pixelの二値タイムスタンプが入ります。
+`camera_latency_node.py`はDocker側で単体動作します。コンテナへはこの1ファイルだけコピーすればよく、`analyze_camera_csv.py`、`latency_protocol.py`、コピー版`teleimager`は不要です。ただし、コンテナには通常の画像サーバーとして動作する`teleimager`と、そのカメラ・WebRTC依存パッケージがインストール済みである必要があります。
 
-ロボット側で、コピー版teleimagerを優先して画像サーバーを起動します。
+ホストからコンテナへコピーし、このファイル経由で画像サーバーを起動します。`--rs`など未認識の引数は、そのまま`teleimager.image_server`へ渡されます。
 
 ```bash
-cd /path/to/xr_teleoperate
-export PYTHONPATH="$PWD/latency_measurement/teleop/teleimager/src:${PYTHONPATH}"
-export XR_CAMERA_LATENCY_PROBE=1
-export XR_CAMERA_LATENCY_LOG_DIR="$PWD/latency_measurement/logs"
+# ホスト側
+docker cp latency_measurement/camera_latency_node.py \
+  CONTAINER_NAME:/tmp/camera_latency_node.py
 
-python -m teleimager.image_server --rs
+# コンテナ内（/logsは書き込み可能なvolume等に変更可）
+python3 /tmp/camera_latency_node.py \
+  --latency-log-dir /logs \
+  --rs
 ```
+
+この起動方法ではWebRTC publisherへフレームを渡す直前に、映像左上へ448×16 pixelの二値タイムスタンプを付加します。元の`teleimager`ファイルは書き換えません。
 
 Questブラウザでhead cameraのWebRTCポートを直接開き、`Start`を押します。既定設定ではhead cameraは60001です。
 
@@ -204,24 +209,24 @@ https://ROBOT_CAMERA_ADDRESS:60001/
 ページはブラウザ↔ロボット画像サーバーの時計を20回往復同期した後、各表示フレームのマーカーを読みます。画面には現在値、p50、p95が表示され、30フレームごとにロボット側へCSVが保存されます。
 
 ```text
-latency_measurement/logs/xr_camera_latency_60001.csv
+/logs/xr_camera_latency_60001.csv
 ```
 
-集計:
+同じ1ファイルで集計できます。
 
 ```bash
-python latency_measurement/analyze_camera_csv.py \
-  latency_measurement/logs/xr_camera_latency_60001.csv
+python3 /tmp/camera_latency_node.py \
+  --analyze /logs/xr_camera_latency_60001.csv
 ```
 
 この値に含まれるもの:
 
-- カメラ取得後のteleimager処理
+- WebRTC publisherへフレームを渡してからエンコードされるまで
 - WebRTCエンコード
 - WAN伝送
 - Questブラウザの受信・ジッターバッファ・デコード
 - `requestVideoFrameCallback`で表示処理へ渡るまで
 
-VuerのWebRTC planeによる最終XR合成時間は、直接の計測ページとは別処理なので含まれません。また、カメラ露光開始からPythonがフレームを受け取るまでのセンサー内部時間も含まれません。
+VuerのWebRTC planeによる最終XR合成時間は、直接の計測ページとは別処理なので含まれません。また、カメラ露光開始からPythonがフレームを受け取るまでと、teleimager内部でWebRTC publisherへ渡される前の時間も含まれません。
 
-計測終了後は`XR_CAMERA_LATENCY_PROBE`を解除して画像サーバーを再起動してください。
+計測終了後はこのプロセスを停止し、通常の`teleimager.image_server`起動方法へ戻してください。
