@@ -4,22 +4,86 @@
 from __future__ import annotations
 
 import argparse
-import os
 import socket
-import sys
+import struct
 import time
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-MEASUREMENT_DIR = os.path.dirname(CURRENT_DIR)
-sys.path.insert(0, MEASUREMENT_DIR)
+from dataclasses import dataclass
 
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool, Int64MultiArray
 
-from clock_sync import make_sync_response
-from latency_protocol import PACKET_SIZE, timed_message_data, unpack_packet
+# Protocol definitions are intentionally embedded so this file can be copied
+# into a ROS 2 container and run without any other project files.
+PACKET_MAGIC = b"XRT1"
+PACKET_VERSION = 1
+PACKET_FORMAT = "<4sBQQQQQqq??"
+PACKET_SIZE = struct.calcsize(PACKET_FORMAT)
+
+SYNC_MAGIC = b"XCS1"
+SYNC_VERSION = 1
+SYNC_REQUEST_FORMAT = "<4sBQQ"
+SYNC_REQUEST_SIZE = struct.calcsize(SYNC_REQUEST_FORMAT)
+SYNC_RESPONSE_FORMAT = "<4sBQQQQ"
+
+
+@dataclass(frozen=True)
+class TimingPacket:
+    session_id: int
+    sequence: int
+    browser_event_ns: int
+    xr_receive_ns: int
+    xr_send_ns: int
+    browser_to_xr_offset_ns: int
+    xr_to_robot_offset_ns: int
+    right_b: bool
+    left_y: bool
+
+
+def unpack_packet(data: bytes) -> TimingPacket:
+    if len(data) != PACKET_SIZE:
+        raise ValueError(f"unexpected packet size {len(data)} (expected {PACKET_SIZE})")
+    magic, version, *values = struct.unpack(PACKET_FORMAT, data)
+    if magic != PACKET_MAGIC:
+        raise ValueError(f"unexpected magic {magic!r}")
+    if version != PACKET_VERSION:
+        raise ValueError(f"unsupported protocol version {version}")
+    return TimingPacket(*values)
+
+
+def timed_message_data(packet: TimingPacket, bridge_receive_ns: int, state: bool):
+    return [
+        packet.session_id,
+        packet.sequence,
+        packet.browser_event_ns,
+        packet.browser_to_xr_offset_ns,
+        packet.xr_receive_ns,
+        packet.xr_send_ns,
+        packet.xr_to_robot_offset_ns,
+        bridge_receive_ns,
+        int(state),
+    ]
+
+
+def make_sync_response(data: bytes, server_receive_ns: int) -> bytes:
+    if len(data) != SYNC_REQUEST_SIZE:
+        raise ValueError(
+            f"invalid sync request size {len(data)} (expected {SYNC_REQUEST_SIZE})"
+        )
+    magic, version, nonce, client_send_ns = struct.unpack(SYNC_REQUEST_FORMAT, data)
+    if magic != SYNC_MAGIC or version != SYNC_VERSION:
+        raise ValueError("invalid sync request header")
+    server_send_ns = time.time_ns()
+    return struct.pack(
+        SYNC_RESPONSE_FORMAT,
+        SYNC_MAGIC,
+        SYNC_VERSION,
+        nonce,
+        client_send_ns,
+        server_receive_ns,
+        server_send_ns,
+    )
 
 
 class TimedXrButtonBridge(Node):

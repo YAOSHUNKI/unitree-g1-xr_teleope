@@ -16,6 +16,7 @@ logging_mp.basicConfig(level=logging_mp.INFO)
 logger_mp = logging_mp.getLogger(__name__)
 import os
 import argparse
+import csv
 import glob
 import cv2
 import numpy as np
@@ -43,6 +44,59 @@ from pathlib import Path
 import queue
 import fractions
 from typing import Dict, Optional, Tuple, Any
+
+# ========================================================
+# Camera latency marker
+# ========================================================
+# The marker is enabled only for measurements because it occupies the top-left
+# 448x16 pixels of the WebRTC frame. It contains a capture timestamp and frame
+# sequence that the browser test page decodes after video presentation.
+LATENCY_PROBE_ENABLED = os.getenv("XR_CAMERA_LATENCY_PROBE", "0").lower() in (
+    "1", "true", "yes", "on"
+)
+LATENCY_MARKER_MAGIC = b"\xA5\x5A"
+LATENCY_MARKER_CELL_SIZE = 8
+LATENCY_MARKER_ROWS = 2
+LATENCY_MARKER_COLUMNS = 56
+LATENCY_MARKER_BYTES = 14
+
+
+def _latency_checksum(data: bytes) -> int:
+    checksum = 0
+    for value in data:
+        checksum ^= value
+    return checksum
+
+
+def _encode_latency_marker(frame: np.ndarray, capture_ns: int, sequence: int) -> np.ndarray:
+    """Return a frame with a codec-resistant binary timestamp marker."""
+    if frame is None or frame.ndim != 3:
+        return frame
+    marker_width = LATENCY_MARKER_COLUMNS * LATENCY_MARKER_CELL_SIZE
+    marker_height = LATENCY_MARKER_ROWS * LATENCY_MARKER_CELL_SIZE
+    if frame.shape[1] < marker_width or frame.shape[0] < marker_height:
+        return frame
+
+    timestamp_us = (capture_ns // 1_000) & ((1 << 56) - 1)
+    payload_without_checksum = (
+        LATENCY_MARKER_MAGIC
+        + timestamp_us.to_bytes(7, "big")
+        + (sequence & 0xFFFFFFFF).to_bytes(4, "big")
+    )
+    payload = payload_without_checksum + bytes([_latency_checksum(payload_without_checksum)])
+    marked = frame.copy()
+    for bit_index in range(LATENCY_MARKER_BYTES * 8):
+        byte = payload[bit_index // 8]
+        bit = (byte >> (7 - bit_index % 8)) & 1
+        row, column = divmod(bit_index, LATENCY_MARKER_COLUMNS)
+        x0 = column * LATENCY_MARKER_CELL_SIZE
+        y0 = row * LATENCY_MARKER_CELL_SIZE
+        value = 255 if bit else 0
+        marked[
+            y0:y0 + LATENCY_MARKER_CELL_SIZE,
+            x0:x0 + LATENCY_MARKER_CELL_SIZE,
+        ] = value
+    return marked
 
 # ========================================================
 # cam_config_server.yaml path
@@ -157,6 +211,9 @@ INDEX_HTML = """
     }
     button { padding: 10px 20px; font-size: 16px; cursor: pointer; }
     video { width: 100%; max-width: 1280px; background: #000; margin-top: 10px; }
+    #latency { font: 18px monospace; white-space: pre-wrap; margin: 12px; }
+    #latency.ok { color: #087f23; }
+    #latency.error { color: #b00020; }
     
     /* Title link style */
     h1 a {
@@ -193,6 +250,8 @@ INDEX_HTML = """
     <div id="media">
         <video id="video" autoplay playsinline muted></video>
         <audio id="audio" autoplay></audio>
+        <canvas id="latency-canvas" style="display:none"></canvas>
+        <div id="latency">カメラ遅延計測: 初期化中</div>
     </div>
     
     <script src="client.js"></script>
@@ -203,6 +262,131 @@ INDEX_HTML = """
 CLIENT_JS = """
 var pc = null;
 var _fallback = false;
+var latencyConfig = null;
+var robotMinusBrowserMs = 0;
+var latencyValues = [];
+var latencyBatch = [];
+var lastLatencySequence = null;
+
+const browserEpochMs = () => performance.timeOrigin + performance.now();
+const sleepMs = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+async function prepareLatencyProbe() {
+    latencyConfig = await fetch('/latency-config', {cache: 'no-store'}).then(r => r.json());
+    var status = document.getElementById('latency');
+    if (!latencyConfig.enabled) {
+        status.className = 'error';
+        status.textContent = 'カメラ遅延計測は無効です。XR_CAMERA_LATENCY_PROBE=1で起動してください。';
+        return;
+    }
+    var samples = [];
+    for (var nonce = 1; nonce <= 20; nonce++) {
+        var t0 = browserEpochMs();
+        var response = await fetch('/latency-sync', {
+            method: 'POST', cache: 'no-store',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({nonce: nonce})
+        }).then(r => r.json());
+        var t3 = browserEpochMs();
+        var offset = ((response.t1_ms - t0) + (response.t2_ms - t3)) / 2;
+        var rtt = (t3 - t0) - (response.t2_ms - response.t1_ms);
+        samples.push({offset_ms: offset, rtt_ms: Math.max(0, rtt)});
+        status.textContent = `時計同期中 ${nonce}/20`;
+        await sleepMs(20);
+    }
+    samples.sort((a, b) => a.rtt_ms - b.rtt_ms);
+    var best = samples.slice(0, 5).sort((a, b) => a.offset_ms - b.offset_ms);
+    robotMinusBrowserMs = best[Math.floor(best.length / 2)].offset_ms;
+    status.className = 'ok';
+    status.textContent = `時計同期完了 offset=${robotMinusBrowserMs.toFixed(3)} ms`;
+}
+
+function decodeLatencyMarker(video) {
+    if (!latencyConfig || !latencyConfig.enabled ||
+        video.videoWidth < latencyConfig.width || video.videoHeight < latencyConfig.height) return null;
+    var canvas = document.getElementById('latency-canvas');
+    canvas.width = latencyConfig.width;
+    canvas.height = latencyConfig.height;
+    var context = canvas.getContext('2d', {willReadFrequently: true});
+    context.drawImage(video, 0, 0, latencyConfig.width, latencyConfig.height,
+                      0, 0, latencyConfig.width, latencyConfig.height);
+    var pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    var bytes = new Uint8Array(14);
+    for (var bitIndex = 0; bitIndex < 112; bitIndex++) {
+        var row = Math.floor(bitIndex / latencyConfig.columns);
+        var column = bitIndex % latencyConfig.columns;
+        var x = Math.floor((column + 0.5) * latencyConfig.cell_size);
+        var y = Math.floor((row + 0.5) * latencyConfig.cell_size);
+        var pixel = (y * canvas.width + x) * 4;
+        var luminance = (pixels[pixel] + pixels[pixel + 1] + pixels[pixel + 2]) / 3;
+        if (luminance > 127) bytes[Math.floor(bitIndex / 8)] |= 1 << (7 - bitIndex % 8);
+    }
+    if (bytes[0] !== 0xA5 || bytes[1] !== 0x5A) return null;
+    var checksum = 0;
+    for (var index = 0; index < 13; index++) checksum ^= bytes[index];
+    if (checksum !== bytes[13]) return null;
+    var captureUs = 0;
+    for (var index = 2; index < 9; index++) captureUs = captureUs * 256 + bytes[index];
+    var sequence = 0;
+    for (var index = 9; index < 13; index++) sequence = sequence * 256 + bytes[index];
+    return {capture_us: captureUs, sequence: sequence};
+}
+
+function percentile(values, fraction) {
+    var ordered = [...values].sort((a, b) => a - b);
+    return ordered[Math.min(ordered.length - 1, Math.floor((ordered.length - 1) * fraction))];
+}
+
+function startLatencyCallbacks(video) {
+    if (!video.requestVideoFrameCallback) {
+        document.getElementById('latency').textContent = 'requestVideoFrameCallback非対応ブラウザです。';
+        return;
+    }
+    var onFrame = (now, metadata) => {
+        var marker = decodeLatencyMarker(video);
+        if (marker && marker.sequence !== lastLatencySequence) {
+            lastLatencySequence = marker.sequence;
+            var displayBrowserMs = performance.timeOrigin + now;
+            var latencyMs = displayBrowserMs + robotMinusBrowserMs - marker.capture_us / 1000;
+            latencyValues.push(latencyMs);
+            if (latencyValues.length > 300) latencyValues.shift();
+            latencyBatch.push({
+                sequence: marker.sequence,
+                capture_us: String(marker.capture_us),
+                display_browser_ms: displayBrowserMs,
+                robot_minus_browser_ms: robotMinusBrowserMs,
+                latency_ms: latencyMs
+            });
+            var status = document.getElementById('latency');
+            status.className = latencyMs >= 0 ? 'ok' : 'error';
+            status.textContent = `カメラ遅延 ${latencyMs.toFixed(1)} ms  ` +
+                `p50=${percentile(latencyValues, 0.50).toFixed(1)}  ` +
+                `p95=${percentile(latencyValues, 0.95).toFixed(1)}  ` +
+                `frames=${latencyValues.length}`;
+            if (latencyBatch.length >= 30) {
+                var batch = latencyBatch;
+                latencyBatch = [];
+                fetch('/latency-result', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({samples: batch})
+                }).catch(() => {});
+            }
+        }
+        video.requestVideoFrameCallback(onFrame);
+    };
+    video.requestVideoFrameCallback(onFrame);
+}
+
+function flushLatencyBatch() {
+    if (!latencyBatch.length) return;
+    var batch = latencyBatch;
+    latencyBatch = [];
+    navigator.sendBeacon(
+        '/latency-result',
+        new Blob([JSON.stringify({samples: batch})], {type: 'application/json'})
+    );
+}
+window.addEventListener('pagehide', flushLatencyBatch);
 
 function negotiate(codec) {
     pc.addTransceiver('video', { direction: 'recvonly' });
@@ -244,7 +428,8 @@ function negotiate(codec) {
     });
 }
 
-function start() {
+async function start() {
+    await prepareLatencyProbe();
     var config = {
         sdpSemantics: 'unified-plan'
     };
@@ -255,6 +440,7 @@ function start() {
         if (evt.track.kind == 'video') {
             var v = document.getElementById('video');
             v.srcObject = evt.streams[0];
+            v.addEventListener('loadeddata', () => startLatencyCallbacks(v), {once: true});
             // H.264 -> VP8 fallback: if no frames in 5s, reconnect with VP8
             if (!_fallback) {
                 var t0 = v.currentTime;
@@ -277,6 +463,7 @@ function start() {
 }
 
 function stop() {
+    flushLatencyBatch();
     document.getElementById('stop').style.display = 'none';
     document.getElementById('start').style.display = 'inline-block';
     if (pc) {
@@ -363,6 +550,13 @@ class WebRTC_PublisherThread(threading.Thread):
         self._start_event = threading.Event()
         self._stop_event = threading.Event()
         self._frame_queue = queue.Queue(maxsize=1)
+        latency_log_dir = Path(os.getenv("XR_CAMERA_LATENCY_LOG_DIR", "/tmp"))
+        self._latency_log_path = latency_log_dir / f"xr_camera_latency_{port}.csv"
+        if LATENCY_PROBE_ENABLED:
+            logger_mp.info(
+                f"[Camera Latency] marker enabled on WebRTC port {port}; "
+                f"CSV={self._latency_log_path}"
+            )
 
         self._bgr_track: Optional[BGRArrayVideoStreamTrack] = None
         self._relay: Optional[MediaRelay] = None
@@ -371,17 +565,76 @@ class WebRTC_PublisherThread(threading.Thread):
         # register routes
         self._app.router.add_get("/", self._index)
         self._app.router.add_get("/client.js", self._javascript)
+        self._app.router.add_get("/latency-config", self._latency_config)
         self._app.router.add_post("/offer", self._offer)
+        self._app.router.add_post("/latency-sync", self._latency_sync)
+        self._app.router.add_post("/latency-result", self._latency_result)
 
         self._app.router.add_options("/", self._options)
         self._app.router.add_options("/client.js", self._options)
         self._app.router.add_options("/offer", self._options)
+        self._app.router.add_options("/latency-sync", self._options)
+        self._app.router.add_options("/latency-result", self._options)
 
     async def _index(self, request: web.Request) -> web.Response:
         return web.Response(content_type="text/html", text=INDEX_HTML)
     
     async def _javascript(self, request: web.Request) -> web.Response:
         return web.Response(content_type="application/javascript", text=CLIENT_JS)
+
+    async def _latency_config(self, request: web.Request) -> web.Response:
+        return web.json_response({
+            "enabled": LATENCY_PROBE_ENABLED,
+            "cell_size": LATENCY_MARKER_CELL_SIZE,
+            "rows": LATENCY_MARKER_ROWS,
+            "columns": LATENCY_MARKER_COLUMNS,
+            "width": LATENCY_MARKER_COLUMNS * LATENCY_MARKER_CELL_SIZE,
+            "height": LATENCY_MARKER_ROWS * LATENCY_MARKER_CELL_SIZE,
+        })
+
+    async def _latency_sync(self, request: web.Request) -> web.Response:
+        server_receive_ns = time.time_ns()
+        try:
+            payload = await request.json()
+            nonce = int(payload.get("nonce", 0))
+        except Exception:
+            return self._error_response(400, "Invalid clock-sync request")
+        return web.json_response({
+            "nonce": nonce,
+            "t1_ms": server_receive_ns / 1_000_000,
+            "t2_ms": time.time_ns() / 1_000_000,
+        })
+
+    async def _latency_result(self, request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+            samples = payload.get("samples", [])
+            if not isinstance(samples, list) or len(samples) > 300:
+                raise ValueError("invalid samples")
+            self._latency_log_path.parent.mkdir(parents=True, exist_ok=True)
+            write_header = not self._latency_log_path.exists() or self._latency_log_path.stat().st_size == 0
+            with self._latency_log_path.open("a", newline="", encoding="utf-8") as log_file:
+                fields = [
+                    "received_ns", "client", "webrtc_port", "sequence", "capture_us",
+                    "display_browser_ms", "robot_minus_browser_ms", "latency_ms",
+                ]
+                writer = csv.DictWriter(log_file, fieldnames=fields)
+                if write_header:
+                    writer.writeheader()
+                for sample in samples:
+                    writer.writerow({
+                        "received_ns": time.time_ns(),
+                        "client": request.remote or "",
+                        "webrtc_port": self._port,
+                        "sequence": int(sample["sequence"]),
+                        "capture_us": int(sample["capture_us"]),
+                        "display_browser_ms": f'{float(sample["display_browser_ms"]):.6f}',
+                        "robot_minus_browser_ms": f'{float(sample["robot_minus_browser_ms"]):.6f}',
+                        "latency_ms": f'{float(sample["latency_ms"]):.6f}',
+                    })
+            return web.json_response({"saved": len(samples), "path": str(self._latency_log_path)})
+        except (KeyError, TypeError, ValueError) as exc:
+            return self._error_response(400, f"Invalid latency result: {exc}")
 
     async def _options(self, request):
         return web.Response(
@@ -924,6 +1177,7 @@ class BaseCamera:
             self._webrtc_buffer = TripleRingBuffer()
         else:
             self._webrtc_buffer = None
+        self._latency_frame_sequence = 0
 
     def __str__(self):
         raise NotImplementedError
@@ -952,6 +1206,18 @@ class BaseCamera:
     def get_bgr_frame(self):
         bgr_numpy = self._webrtc_buffer.read() if self._enable_webrtc and self._webrtc_buffer else None
         return bgr_numpy
+
+    def _write_webrtc_frame(self, bgr_numpy):
+        if not self._enable_webrtc or self._webrtc_buffer is None:
+            return
+        if LATENCY_PROBE_ENABLED:
+            self._latency_frame_sequence = (self._latency_frame_sequence + 1) & 0xFFFFFFFF
+            bgr_numpy = _encode_latency_marker(
+                bgr_numpy,
+                capture_ns=time.time_ns(),
+                sequence=self._latency_frame_sequence,
+            )
+        self._webrtc_buffer.write(bgr_numpy)
 
     def get_depth_frame(self):
         """Return a depth frame as bytes, or None if not supported. 
@@ -1050,7 +1316,7 @@ class RealSenseCamera(BaseCamera):
         bgr_numpy = np.asanyarray(color_frame.get_data())
 
         if self._enable_webrtc:
-            self._webrtc_buffer.write(bgr_numpy)
+            self._write_webrtc_frame(bgr_numpy)
 
         if self._enable_zmq:
             ok, buf = cv2.imencode(".jpg", bgr_numpy)
@@ -1121,7 +1387,7 @@ class UVCCamera(BaseCamera):
 
                 if self._enable_webrtc:
                     if frame.bgr is not None:
-                        self._webrtc_buffer.write(frame.bgr)
+                        self._write_webrtc_frame(frame.bgr)
 
                 if not self._ready.is_set():
                     self._ready.set()
@@ -1179,7 +1445,7 @@ class OpenCVCamera(BaseCamera):
             ret, bgr_numpy = self.cap.read()
             if ret:
                 if self._enable_webrtc:
-                    self._webrtc_buffer.write(bgr_numpy)
+                    self._write_webrtc_frame(bgr_numpy)
 
                 if self._enable_zmq:
                     ok, buf = cv2.imencode(".jpg", bgr_numpy)
@@ -1264,7 +1530,7 @@ class IsaacSimCamera(BaseCamera):
 
             # For WebRTC: use BGR frames directly
             if self._enable_webrtc:
-                self._webrtc_buffer.write(frame_data)
+                self._write_webrtc_frame(frame_data)
             else:
                 logger_mp.warning(f"[IsaacSimCamera] Failed to encode to WebRTC for {self._cam_topic}")
             if not self._ready.is_set():
