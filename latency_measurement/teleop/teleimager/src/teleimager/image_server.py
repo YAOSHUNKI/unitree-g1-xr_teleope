@@ -551,11 +551,13 @@ class WebRTC_PublisherThread(threading.Thread):
         self._stop_event = threading.Event()
         self._frame_queue = queue.Queue(maxsize=1)
         latency_log_dir = Path(os.getenv("XR_CAMERA_LATENCY_LOG_DIR", "/tmp"))
-        self._latency_log_path = latency_log_dir / f"xr_camera_latency_{port}.csv"
+        self._latency_log_dir = latency_log_dir
+        self._default_latency_run = self._next_latency_run()
+        self._latency_log_path = self._latency_path(self._default_latency_run)
         if LATENCY_PROBE_ENABLED:
             logger_mp.info(
                 f"[Camera Latency] marker enabled on WebRTC port {port}; "
-                f"CSV={self._latency_log_path}"
+                f"default CSV={self._latency_log_path}; XR run number overrides it"
             )
 
         self._bgr_track: Optional[BGRArrayVideoStreamTrack] = None
@@ -575,6 +577,17 @@ class WebRTC_PublisherThread(threading.Thread):
         self._app.router.add_options("/offer", self._options)
         self._app.router.add_options("/latency-sync", self._options)
         self._app.router.add_options("/latency-result", self._options)
+
+    def _latency_path(self, run_number: int) -> Path:
+        return self._latency_log_dir / (
+            f"xr_camera_latency_run{run_number:02d}_port{self._port}.csv"
+        )
+
+    def _next_latency_run(self) -> int:
+        for run_number in range(1, 1_000_000):
+            if not self._latency_path(run_number).exists():
+                return run_number
+        raise RuntimeError(f"No available camera latency run number in {self._latency_log_dir}")
 
     async def _index(self, request: web.Request) -> web.Response:
         return web.Response(content_type="text/html", text=INDEX_HTML)
@@ -611,11 +624,18 @@ class WebRTC_PublisherThread(threading.Thread):
             samples = payload.get("samples", [])
             if not isinstance(samples, list) or len(samples) > 300:
                 raise ValueError("invalid samples")
-            self._latency_log_path.parent.mkdir(parents=True, exist_ok=True)
-            write_header = not self._latency_log_path.exists() or self._latency_log_path.stat().st_size == 0
-            with self._latency_log_path.open("a", newline="", encoding="utf-8") as log_file:
+            requested_run = payload.get("run")
+            run_number = (
+                self._default_latency_run if requested_run is None else int(requested_run)
+            )
+            if not 1 <= run_number < 1_000_000:
+                raise ValueError("run must be between 1 and 999999")
+            latency_log_path = self._latency_path(run_number)
+            latency_log_path.parent.mkdir(parents=True, exist_ok=True)
+            write_header = not latency_log_path.exists() or latency_log_path.stat().st_size == 0
+            with latency_log_path.open("a", newline="", encoding="utf-8") as log_file:
                 fields = [
-                    "received_ns", "client", "webrtc_port", "sequence", "capture_us",
+                    "run", "received_ns", "client", "webrtc_port", "sequence", "capture_us",
                     "display_browser_ms", "robot_minus_browser_ms", "latency_ms",
                 ]
                 writer = csv.DictWriter(log_file, fieldnames=fields)
@@ -623,6 +643,7 @@ class WebRTC_PublisherThread(threading.Thread):
                     writer.writeheader()
                 for sample in samples:
                     writer.writerow({
+                        "run": run_number,
                         "received_ns": time.time_ns(),
                         "client": request.remote or "",
                         "webrtc_port": self._port,
@@ -633,7 +654,7 @@ class WebRTC_PublisherThread(threading.Thread):
                         "latency_ms": f'{float(sample["latency_ms"]):.6f}',
                     })
             return web.json_response(
-                {"saved": len(samples), "path": str(self._latency_log_path)},
+                {"saved": len(samples), "run": run_number, "path": str(latency_log_path)},
                 headers={"Access-Control-Allow-Origin": "*"},
             )
         except (KeyError, TypeError, ValueError) as exc:

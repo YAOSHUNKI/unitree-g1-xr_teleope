@@ -3,6 +3,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from multiprocessing import Value, Array, Lock
@@ -87,6 +88,20 @@ def load_browser_clock_offset(path: Path, max_age_seconds: float = 600.0):
         )
     return int(data["offset_ns"]), int(data["rtt_ns"])
 
+
+def open_next_input_latency_csv(log_dir: Path):
+    """Atomically create the next runNN input CSV without overwriting a prior run."""
+    log_dir.mkdir(parents=True, exist_ok=True)
+    for run_number in range(1, 1_000_000):
+        output_path = log_dir / f"xr_input_latency_run{run_number:02d}.csv"
+        try:
+            return run_number, output_path, output_path.open(
+                "x", newline="", encoding="utf-8"
+            )
+        except FileExistsError:
+            continue
+    raise RuntimeError(f"No available input latency run number in {log_dir}")
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # basic control parameters
@@ -120,7 +135,7 @@ if __name__ == '__main__':
         '--input-latency-output',
         type=Path,
         default=None,
-        help='Local CSV for browser-to-XR input latency (default: latency_measurement/logs/xr_input_latency_TIMESTAMP.csv)',
+        help='Local CSV for browser-to-XR input latency (default: auto-numbered latency_measurement/logs/xr_input_latency_runNN.csv)',
     )
     parser.add_argument(
         '--input-latency-log-disable',
@@ -162,22 +177,28 @@ if __name__ == '__main__':
                 )
 
         input_latency_writer = None
+        measurement_run = None
         if args.input_mode == "controller" and not args.input_latency_log_disable:
             output_path = args.input_latency_output
             if output_path is None:
-                timestamp = time.strftime("%Y%m%d_%H%M%S")
-                output_path = Path(parent_dir) / "logs" / f"xr_input_latency_{timestamp}.csv"
-            elif not output_path.is_absolute():
-                # Interpret documented relative paths from the repository root,
-                # even when this script is launched inside latency_measurement/teleop.
-                output_path = Path(parent_dir).parent / output_path
-            output_path = output_path.expanduser().resolve()
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            input_latency_file = output_path.open("w", newline="", encoding="utf-8")
+                measurement_run, output_path, input_latency_file = open_next_input_latency_csv(
+                    Path(parent_dir) / "logs"
+                )
+                output_path = output_path.resolve()
+            else:
+                if not output_path.is_absolute():
+                    # Interpret documented relative paths from the repository root,
+                    # even when this script is launched inside latency_measurement/teleop.
+                    output_path = Path(parent_dir).parent / output_path
+                output_path = output_path.expanduser().resolve()
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                input_latency_file = output_path.open("w", newline="", encoding="utf-8")
+                run_match = re.search(r"run(\d+)", output_path.stem, re.IGNORECASE)
+                measurement_run = int(run_match.group(1)) if run_match else None
             input_latency_writer = csv.DictWriter(
                 input_latency_file,
                 fieldnames=[
-                    "sequence", "browser_event_ns", "xr_receive_ns",
+                    "run", "sequence", "browser_event_ns", "xr_receive_ns",
                     "browser_to_xr_offset_ns", "clock_sync_valid",
                     "browser_to_xr_raw_ms", "browser_to_xr_ms",
                     "right_b", "left_y",
@@ -185,7 +206,11 @@ if __name__ == '__main__':
             )
             input_latency_writer.writeheader()
             input_latency_file.flush()
-            logger_mp.info(f"browser -> XR latency CSV: {output_path}")
+            logger_mp.info(
+                f"browser -> XR latency CSV (run{measurement_run:02d}): {output_path}"
+                if measurement_run is not None
+                else f"browser -> XR latency CSV: {output_path}"
+            )
 
         # ipc communication mode. client usage: see utils/ipc.py
         if args.ipc:
@@ -215,6 +240,7 @@ if __name__ == '__main__':
                                      zmq=camera_config['head_camera']['enable_zmq'],
                                      webrtc=camera_config['head_camera']['enable_webrtc'],
                                      webrtc_url=f"https://{args.img_server_ip}:{camera_config['head_camera']['webrtc_port']}/offer",
+                                     measurement_run=measurement_run,
                                      arm_reference_mode="head_yaw"
                                      )
         
@@ -404,6 +430,7 @@ if __name__ == '__main__':
                 raw_ns = tele_data.xr_receive_ns - tele_data.browser_event_ns
                 corrected_ns = raw_ns - browser_to_xr_offset_ns
                 input_latency_writer.writerow({
+                    "run": measurement_run if measurement_run is not None else "",
                     "sequence": tele_data.controller_event_sequence,
                     "browser_event_ns": tele_data.browser_event_ns,
                     "xr_receive_ns": tele_data.xr_receive_ns,

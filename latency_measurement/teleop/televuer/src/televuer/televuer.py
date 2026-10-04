@@ -19,14 +19,16 @@ from vuer.base import websocket_handler
 class LatencyVuer(Vuer):
     """Vuer server that injects the camera marker decoder into its web client."""
 
-    def __init__(self, *args, camera_origin: str = None, **kwargs):
+    def __init__(self, *args, camera_origin: str = None, measurement_run: int = None, **kwargs):
         super().__init__(*args, **kwargs)
         self._camera_latency_script = None
         if camera_origin:
             script_path = Path(__file__).resolve().with_name("camera_latency_client.js")
             script = script_path.read_text(encoding="utf-8")
-            self._camera_latency_script = script.replace(
-                "__CAMERA_ORIGIN__", json.dumps(camera_origin.rstrip("/"))
+            self._camera_latency_script = (
+                script.replace(
+                    "__CAMERA_ORIGIN__", json.dumps(camera_origin.rstrip("/"))
+                ).replace("__MEASUREMENT_RUN__", json.dumps(measurement_run))
             )
 
     async def socket_index(self, request):
@@ -45,7 +47,7 @@ class LatencyVuer(Vuer):
 class TeleVuer:
     def __init__(self, use_hand_tracking: bool, binocular: bool=True, img_shape: tuple=None, display_fps: float=30.0,
                        display_mode: Literal["immersive", "pass-through", "ego"]="immersive", zmq: bool=False, webrtc: bool=False, webrtc_url: str=None, 
-                       cert_file: str=None, key_file: str=None):
+                       cert_file: str=None, key_file: str=None, measurement_run: int=None):
         """
         TeleVuer class for OpenXR-based XR teleoperate applications.
         This class handles the communication with the Vuer server and manages image and pose data.
@@ -130,6 +132,7 @@ class TeleVuer:
             queries=dict(grid=False),
             queue_len=3,
             camera_origin=camera_origin,
+            measurement_run=measurement_run,
         )
         if camera_origin:
             print(

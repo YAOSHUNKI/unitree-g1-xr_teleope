@@ -2,6 +2,7 @@
   "use strict";
 
   const cameraOrigin = __CAMERA_ORIGIN__;
+  const measurementRun = __MEASUREMENT_RUN__;
   const nativeCreateElement = Document.prototype.createElement;
   const trackedVideos = new WeakSet();
   const state = {
@@ -125,7 +126,7 @@
 
   function flush(useBeacon) {
     if (!state.batch.length) return;
-    const body = JSON.stringify({samples: state.batch});
+    const body = JSON.stringify({run: measurementRun, samples: state.batch});
     state.batch = [];
     const url = cameraOrigin + "/latency-result";
     if (useBeacon) {
@@ -167,6 +168,7 @@
               latency_ms: latencyMs,
             });
             setStatus(
+              (measurementRun ? "run" + String(measurementRun).padStart(2, "0") + "  " : "") +
               "camera " + latencyMs.toFixed(1) + " ms  " +
               "p50=" + percentile(state.values, 0.50).toFixed(1) + "  " +
               "p95=" + percentile(state.values, 0.95).toFixed(1) + "  " +
