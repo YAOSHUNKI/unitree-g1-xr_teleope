@@ -1,232 +1,141 @@
-# XR入力―ロボットsubscriber 遅延計測環境
+# XR遅延計測（ROS・Dockerなし）
 
-ブラウザからDocker内ROS 2 subscriberまでの時刻を同じsequenceで記録する
+QuestブラウザからXR PCまでのコントローラー入力遅延と、ロボットPCからQuestブラウザまでのカメラ映像遅延を計測します。計測経路にROS 2、Docker、専用UDP bridgeは使用しません。
 
-## 計測経路
+## 計測区間
+
+コントローラー入力:
 
 ```text
 Questブラウザ
-  browser_event_ns       VuerがCONTROLLER_MOVEをWSSへ送る時刻
-        ↓ WSS（インターネット）
-XR teleop PC
-  xr_receive_ns          TeleVuer handlerがイベントを受けた時刻
-  xr_send_ns             ロボット宛UDPを送る直前の時刻
-        ↓ UDP（VPN推奨）
-ロボット内部PC
-  bridge_receive_ns      UDP bridgeが受けた時刻
-        ↓ ROS 2
-Docker subscriber
-  subscriber_receive_ns  callback開始時刻
+  browser_event_ns  CONTROLLER_MOVEをWSSへ送る時刻
+        ↓ WSS
+XR PC
+  xr_receive_ns     TeleVuerがイベントを受信した時刻
 ```
 
-起動前・起動時にNTP方式の往復計測を行い、ブラウザ→XR PCとXR PC→ロボットPCの時計オフセットを補正します。CSVの`*_raw_ms`は補正前、それ以外は補正後です。ネットワーク経路が大きく非対称な場合は往復推定にも誤差が残ります。
+`browser_to_xr_ms`は、ブラウザとXR PCの時計差を補正した受信遅延です。Vuerは現在30 Hzでイベントを送るため、物理入力から次の送信タイミングまでの待ち時間（最大約33 ms）は含みません。
 
-Vuerの現在の実装ではブラウザ時刻はWebXRハードウェアサンプルそのものではなく、30 Hzの `CONTROLLER_MOVE` をWSSへ送る時刻です。そのため、物理入力からブラウザ送信まで最大約33 msの待ち時間はこのCSVに含まれません。
+カメラ映像:
 
-## ファイル
+```text
+ロボットPCのteleimager → WebRTC → Questブラウザの表示処理
+```
 
-- `teleop/teleop_hand_and_arm_button.py`: 時刻付き送信を加えた遠隔操作プログラム
-- `teleop/televuer/`: ブラウザ時刻とXR PC受信時刻を取り出すコピー版TeleVuer
-- `teleop/xr_button_bridge_node.py`: UDPから計測用ROS 2トピックへのブリッジ
-- `robot/timed_button_subscriber.py`: Docker内でCSVを記録するsubscriber
-- `browser_clock_sync_server.py`: QuestブラウザとXR PCの時計同期ページ
-- `clock_sync.py`: XR PCとロボットPCのUDP時計同期
-- `analyze_csv.py`: min/mean/p50/p95/p99/maxとsequence欠落を集計
-- `camera_latency_node.py`: Docker側のカメラ計測サーバー起動・CSV保存・集計（単体動作）
-- `analyze_camera_csv.py`: ホスト側でカメラCSVだけを集計する補助スクリプト
-- `send_test_packets.py`: XRを起動せず通信経路を確認するテスト送信器
+## 使用ファイル
 
-## 1. 基本の時計同期
+- `browser_clock_sync_server.py`: QuestブラウザとXR PCの時計同期
+- `teleop/teleop_hand_and_arm_button.py`: teleop実行と入力遅延CSVの保存
+- `analyze_input_latency_csv.py`: 入力遅延CSVの集計
+- `teleop/teleimager/`: カメラ遅延マーカーを追加したコピー版teleimager
+- `analyze_camera_csv.py`: カメラ遅延CSVの集計
 
-XR PCとロボット内部PCの両方でchronyを有効にし、測定直前に状態を確認します。
+## 1. 端末の時刻確認
+
+XR PCとロボットPCで確認します。
 
 ```bash
 chronyc tracking
 chronyc sources -v
 ```
 
-Questは日付と時刻の自動設定を有効にします。chronyに加えて、以下のアプリケーション内同期を測定ごとに実行します。
+Questは「日付と時刻の自動設定」を有効にします。
 
-## 2. ネットワーク
+## 2. QuestブラウザとXR PCの時計同期
 
-XR PCとロボット内部PCの間はWireGuardやTailscale等のVPNを推奨します。UDP 9870（計測）と9871（時計同期）をインターネットへ直接公開せず、`--button-bridge-host`にはロボット側VPN IPを指定します。
-
-Dockerでbridgeとsubscriberを実行する場合は、ROS 2 discoveryとUDP受信を簡単にするためhost networkを推奨します。
+XR PCで実行します。
 
 ```bash
-docker run --network host ...
-```
-
-bridgeをホスト側、subscriberだけをDocker側で動かす場合も、Dockerをhost networkにするか、使用中のROS 2 DDSに合わせてネットワーク設定を行います。bridgeとsubscriberの`ROS_DOMAIN_ID`は同じ値にしてください。
-
-## 3. ロボット側bridge
-
-`xr_button_bridge_node.py`は単体で動作します。コンテナへはこの1ファイルだけコピーすればよく、`latency_protocol.py`や`clock_sync.py`は不要です。コンテナ側にはROS 2の`rclpy`と`std_msgs`が必要です。
-
-```bash
-# ホストからコンテナへコピー
-docker cp latency_measurement/teleop/xr_button_bridge_node.py \
-  CONTAINER_NAME:/tmp/xr_button_bridge_node.py
-
-# コンテナ内で実行
-python3 /tmp/xr_button_bridge_node.py \
-  --host 0.0.0.0 \
-  --port 9870 \
-  --sync-port 9871
-```
-
-配信トピックは次のとおりです。
-
-```text
-/teleop/button/right_b_timed  std_msgs/msg/Int64MultiArray
-/teleop/button/left_y_timed   std_msgs/msg/Int64MultiArray
-/right_button                 std_msgs/msg/Bool（既存互換・エッジのみ）
-/left_button                  std_msgs/msg/Bool（既存互換・エッジのみ）
-```
-
-## 4. Docker内subscriber
-
-別ターミナルで実行します。
-
-```bash
-cd /path/to/xr_teleoperate
-python latency_measurement/robot/timed_button_subscriber.py \
-  --output latency_measurement/logs/run01.csv \
-  --log-every 30
-```
-
-## 5. QuestブラウザとXR PCの時計同期
-
-XR PCで時計同期ページを起動します。TeleVuerと同じ証明書が既定で使われます。
-
-```bash
-cd /path/to/xr_teleoperate
-python latency_measurement/browser_clock_sync_server.py \
+cd /home/shunki/xr_teleoperate
+python3 latency_measurement/browser_clock_sync_server.py \
   --host 0.0.0.0 \
   --port 8013
 ```
 
-Questブラウザから次を開きます。インターネット越しの場合は、8012と同様に到達できる公開ホスト名・リバースプロキシ・VPN等を使用してください。
+Questブラウザで次を開き、「同期完了」を確認します。
 
 ```text
 https://XR_PC_ADDRESS:8013/
 ```
 
-30回の往復計測後に「同期完了」と表示され、次のファイルが作成されます。
+同期結果は`latency_measurement/runtime/browser_clock_offset.json`へ保存され、10分で期限切れになります。各計測の直前に同期してください。
 
-```text
-latency_measurement/runtime/browser_clock_offset.json
-```
+## 3. ロボットPCで計測用カメラサーバーを起動
 
-最小RTTの5サンプルから中央値を採用します。このファイルは10分で期限切れになるため、各測定の直前に同期してください。同期ページのサーバーは、ファイル保存後に停止して構いません。
-
-## 6. XR teleop PC
-
-元の起動コマンドのスクリプト部分をコピー版に変え、ロボットのVPN IPを指定します。その他のarm、ee、image、network引数は実環境の値を使用してください。
+初回だけ、カメラサーバーの依存パッケージをインストールします。
 
 ```bash
-cd /path/to/xr_teleoperate
-python latency_measurement/teleop/teleop_hand_and_arm_button.py \
+cd /home/shunki/xr_teleoperate
+python3 -m pip install -e "./latency_measurement/teleop/teleimager[server]"
+python3 -m pip install pyrealsense2
+```
+
+Dockerではなく、カメラが接続されたロボットPC上で起動します。
+
+```bash
+cd /home/shunki/xr_teleoperate
+export PYTHONPATH="$PWD/latency_measurement/teleop/teleimager/src${PYTHONPATH:+:$PYTHONPATH}"
+export XR_CAMERA_LATENCY_PROBE=1
+export XR_CAMERA_LATENCY_LOG_DIR="$PWD/latency_measurement/logs"
+
+python3 -m teleimager.image_server --rs
+```
+
+`--rs`はRealSense用です。実際のカメラに合わせて通常使用している引数へ変更します。
+
+## 4. XR PCで入力・カメラ同時計測を開始
+
+XR PCで実行します。arm、ee、image、network引数は実環境に合わせます。`ROBOT_IMAGE_IP`には操作用Questからも到達可能なロボットPCのIPを指定します。
+
+```bash
+cd /home/shunki/xr_teleoperate
+python3 latency_measurement/teleop/teleop_hand_and_arm_button.py \
   --input-mode controller \
   --arm G1_23 \
   --motion \
-  --network-interface eth0 \
+  --network-interface XR_PC_INTERFACE \
   --img-server-ip ROBOT_IMAGE_IP \
-  --button-bridge-host ROBOT_VPN_IP \
-  --button-bridge-port 9870 \
-  --clock-sync-port 9871 \
-  --clock-sync-samples 20
+  --input-latency-output /home/shunki/xr_teleoperate/latency_measurement/logs/xr_input_latency_run01.csv
 ```
 
-起動時にブラウザ同期ファイルを読み、続いてロボットbridgeと20回のUDP往復同期を行います。bridgeを先に起動してください。同期に失敗した場合は計測パケットを送信しません。意図的に補正なしで試す場合だけ`--clock-sync-disable`を指定します。
+操作用Questでは、XR PCが配信するローカルVuerページ（通常は`https://XR_PC_ADDRESS:8012/`）だけを開きます。ホスト版`https://vuer.ai/`には計測JavaScriptが注入されないため使用しないでください。
 
-このスクリプトはコピー版TeleVuerを優先して読み込みます。元の `teleop/` と、環境にインストール済みのTeleVuerは変更しません。teleop起動後、Questで通常のWebXR URLを開きます。
+カメラの60001番ページを別タブで開く必要はありません。ローカルVuerページが表示中のWebRTC映像を捕捉し、ロボットPCとの時計同期、映像マーカーの読み取り、カメラCSVへの送信を自動実行します。
 
-## 7. XRなしの疎通確認
-
-```bash
-python latency_measurement/send_test_packets.py ROBOT_VPN_IP \
-  --port 9870 \
-  --sync-port 9871 \
-  --count 100 \
-  --hz 30
-```
-
-bridgeに新しいsessionが表示され、subscriberのCSVに100 sequence分の左右各行が入れば経路は正常です。
-
-テスト送信器もロボットbridgeとのUDP時計同期を行います。ブラウザは介さないため、ブラウザ→XRの補正値だけ0です。
-
-## 8. 集計
-
-```bash
-python latency_measurement/analyze_csv.py latency_measurement/logs/run01.csv
-```
-
-`missing_updates`はブラウザイベントsequenceの飛びです。これはWAN上のUDP損失だけでなく、XR PCのメインループが新しいイベントで上書きされた場合も含む「subscriberまで届かなかった更新数」です。
-
-遠隔操作では平均値よりもp95、p99、最大値と欠落率を重視してください。時計同期が十分でない場合でも、`xr_processing_ms`と`ros_delivery_ms`は有効です。
-
-## CSVの時計関連列
+同時に次の2ファイルが記録されます。
 
 ```text
-browser_to_xr_offset_ns  XR時計 - ブラウザ時計
-xr_to_robot_offset_ns    ロボット時計 - XR時計
-browser_to_xr_raw_ms     補正前
-browser_to_xr_ms         補正後
-wan_raw_ms               補正前
-wan_ms                   補正後
-end_to_end_raw_ms        補正前
-end_to_end_ms            2区間とも補正後
+XR PC:     latency_measurement/logs/xr_input_latency_run01.csv
+ロボットPC: latency_measurement/logs/xr_camera_latency_60001.csv
 ```
 
-補正後の遅延が継続的に負になる場合は、経路の非対称性、古い同期ファイル、端末時計の急な補正を疑ってください。
+## 5. 集計
 
-## カメラ映像遅延の計測
-
-`camera_latency_node.py`はDocker側で単体動作します。コンテナへはこの1ファイルだけコピーすればよく、`analyze_camera_csv.py`、`latency_protocol.py`、コピー版`teleimager`は不要です。ただし、コンテナには通常の画像サーバーとして動作する`teleimager`と、そのカメラ・WebRTC依存パッケージがインストール済みである必要があります。
-
-ホストからコンテナへコピーし、このファイル経由で画像サーバーを起動します。`--rs`など未認識の引数は、そのまま`teleimager.image_server`へ渡されます。
+XR PCで入力遅延と実効更新損失率を集計します。
 
 ```bash
-# ホスト側
-docker cp latency_measurement/camera_latency_node.py \
-  CONTAINER_NAME:/tmp/camera_latency_node.py
-
-# コンテナ内（/logsは書き込み可能なvolume等に変更可）
-python3 /tmp/camera_latency_node.py \
-  --latency-log-dir /logs \
-  --rs
+python3 latency_measurement/analyze_input_latency_csv.py \
+  latency_measurement/logs/xr_input_latency_run01.csv \
+  --expected-hz 30
 ```
 
-この起動方法ではWebRTC publisherへフレームを渡す直前に、映像左上へ448×16 pixelの二値タイムスタンプを付加します。元の`teleimager`ファイルは書き換えません。
+- `consumer_loss`: TeleVuer受信後に記録ループが取りこぼした更新率
+- `estimated_end_to_end_loss`: QuestからCSV記録までの実効的な更新欠落率
 
-Questブラウザでhead cameraのWebRTCポートを直接開き、`Start`を押します。既定設定ではhead cameraは60001です。
+WebXR入力はWSS（WebSocket/TCP）なので、これは純粋なIPパケット損失ではなく、ブラウザ停止、キューdrop、切断、ネットワーク遅延、受信側の取りこぼしを含む利用不能更新率です。
 
-```text
-https://ROBOT_CAMERA_ADDRESS:60001/
-```
-
-ページはブラウザ↔ロボット画像サーバーの時計を20回往復同期した後、各表示フレームのマーカーを読みます。画面には現在値、p50、p95が表示され、30フレームごとにロボット側へCSVが保存されます。
-
-```text
-/logs/xr_camera_latency_60001.csv
-```
-
-同じ1ファイルで集計できます。
+ロボットPCでカメラ遅延を集計します。
 
 ```bash
-python3 /tmp/camera_latency_node.py \
-  --analyze /logs/xr_camera_latency_60001.csv
+python3 latency_measurement/analyze_camera_csv.py \
+  latency_measurement/logs/xr_camera_latency_60001.csv
 ```
 
-この値に含まれるもの:
+カメラ遅延にはWebRTCエンコード、WAN伝送、操作用Questのジッターバッファ、デコード、Vuer内の`requestVideoFrameCallback`までが含まれます。Vuer planeの最終XR合成時間と、カメラ露光開始からPythonがフレームを取得するまでの時間は含みません。
 
-- WebRTC publisherへフレームを渡してからエンコードされるまで
-- WebRTCエンコード
-- WAN伝送
-- Questブラウザの受信・ジッターバッファ・デコード
-- `requestVideoFrameCallback`で表示処理へ渡るまで
+終了後は画像サーバーを停止し、環境変数を解除します。
 
-VuerのWebRTC planeによる最終XR合成時間は、直接の計測ページとは別処理なので含まれません。また、カメラ露光開始からPythonがフレームを受け取るまでと、teleimager内部でWebRTC publisherへ渡される前の時間も含まれません。
-
-計測終了後はこのプロセスを停止し、通常の`teleimager.image_server`起動方法へ戻してください。
+```bash
+unset XR_CAMERA_LATENCY_PROBE
+unset XR_CAMERA_LATENCY_LOG_DIR
+```

@@ -590,7 +590,7 @@ class WebRTC_PublisherThread(threading.Thread):
             "columns": LATENCY_MARKER_COLUMNS,
             "width": LATENCY_MARKER_COLUMNS * LATENCY_MARKER_CELL_SIZE,
             "height": LATENCY_MARKER_ROWS * LATENCY_MARKER_CELL_SIZE,
-        })
+        }, headers={"Access-Control-Allow-Origin": "*"})
 
     async def _latency_sync(self, request: web.Request) -> web.Response:
         server_receive_ns = time.time_ns()
@@ -603,7 +603,7 @@ class WebRTC_PublisherThread(threading.Thread):
             "nonce": nonce,
             "t1_ms": server_receive_ns / 1_000_000,
             "t2_ms": time.time_ns() / 1_000_000,
-        })
+        }, headers={"Access-Control-Allow-Origin": "*"})
 
     async def _latency_result(self, request: web.Request) -> web.Response:
         try:
@@ -632,7 +632,10 @@ class WebRTC_PublisherThread(threading.Thread):
                         "robot_minus_browser_ms": f'{float(sample["robot_minus_browser_ms"]):.6f}',
                         "latency_ms": f'{float(sample["latency_ms"]):.6f}',
                     })
-            return web.json_response({"saved": len(samples), "path": str(self._latency_log_path)})
+            return web.json_response(
+                {"saved": len(samples), "path": str(self._latency_log_path)},
+                headers={"Access-Control-Allow-Origin": "*"},
+            )
         except (KeyError, TypeError, ValueError) as exc:
             return self._error_response(400, f"Invalid latency result: {exc}")
 

@@ -9,9 +9,22 @@ import os
 import sys
 import pickle
 import logging_mp
+from pathlib import Path
 logger_mp = logging_mp.getLogger(__name__)
 parent2_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.append(parent2_dir)
+
+
+def _find_assets_dir() -> Path:
+    """Find the repository assets directory independently of the launch cwd."""
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / "assets"
+        if candidate.is_dir():
+            return candidate
+    raise FileNotFoundError("Could not locate the xr_teleoperate assets directory")
+
+
+ASSETS_DIR = _find_assets_dir()
 
 from teleop.utils.weighted_moving_filter import WeightedMovingFilter
 
@@ -25,12 +38,8 @@ class G1_29_ArmIK:
         # fixed cache file path
         self.cache_path = "g1_29_model_cache.pkl"
 
-        if not self.Unit_Test:
-            self.urdf_path = '../assets/g1/g1_body29_hand14.urdf'
-            self.model_dir = '../assets/g1/'
-        else:
-            self.urdf_path = '../../assets/g1/g1_body29_hand14.urdf'
-            self.model_dir = '../../assets/g1/'
+        self.urdf_path = str(ASSETS_DIR / "g1" / "g1_body29_hand14.urdf")
+        self.model_dir = str(ASSETS_DIR / "g1")
 
         # Try loading cache first
         if os.path.exists(self.cache_path) and (not self.Visualization):
@@ -319,12 +328,8 @@ class G1_23_ArmIK:
         # fixed cache file path
         self.cache_path = "g1_23_model_cache.pkl"
 
-        if not self.Unit_Test:
-            self.urdf_path = '../assets/g1/g1_body23.urdf'
-            self.model_dir = '../assets/g1/'
-        else:
-            self.urdf_path = '../../assets/g1/g1_body23.urdf'
-            self.model_dir = '../../assets/g1/'
+        self.urdf_path = str(ASSETS_DIR / "g1" / "g1_body23.urdf")
+        self.model_dir = str(ASSETS_DIR / "g1")
 
         # Try loading cache first
         if os.path.exists(self.cache_path) and (not self.Visualization):
@@ -599,12 +604,8 @@ class H1_2_ArmIK:
         # fixed cache file path
         self.cache_path = "h1_2_model_cache.pkl"
 
-        if not self.Unit_Test:
-            self.urdf_path = '../assets/h1_2/h1_2.urdf'
-            self.model_dir = '../assets/h1_2/'
-        else:
-            self.urdf_path = '../../assets/h1_2/h1_2.urdf'
-            self.model_dir = '../../assets/h1_2/'
+        self.urdf_path = str(ASSETS_DIR / "h1_2" / "h1_2.urdf")
+        self.model_dir = str(ASSETS_DIR / "h1_2")
 
         # Try loading cache first
         if os.path.exists(self.cache_path) and (not self.Visualization):
@@ -902,12 +903,8 @@ class H1_ArmIK:
         # fixed cache file path
         self.cache_path = "h1_model_cache.pkl"
 
-        if not self.Unit_Test:
-            self.urdf_path = '../assets/h1/h1_with_hand.urdf'
-            self.model_dir = '../assets/h1/'
-        else:
-            self.urdf_path = '../../assets/h1/h1_with_hand.urdf'
-            self.model_dir = '../../assets/h1/'
+        self.urdf_path = str(ASSETS_DIR / "h1" / "h1_with_hand.urdf")
+        self.model_dir = str(ASSETS_DIR / "h1")
 
         # Try loading cache first
         if os.path.exists(self.cache_path) and (not self.Visualization):
@@ -1209,12 +1206,8 @@ class H2_ArmIK:
         # fixed cache file path
         self.cache_path = "h2_model_cache.pkl"
 
-        if not self.Unit_Test:
-            self.urdf_path = "../assets/h2/H2.urdf"
-            self.model_dir = "../assets/h2/"
-        else:
-            self.urdf_path = "../../assets/h2/H2.urdf"
-            self.model_dir = "../../assets/h2/"
+        self.urdf_path = str(ASSETS_DIR / "h2" / "H2.urdf")
+        self.model_dir = str(ASSETS_DIR / "h2")
 
         # Try loading cache first
         if os.path.exists(self.cache_path) and (not self.Visualization):
@@ -1496,12 +1489,8 @@ class R1_A5_ArmIK:
         # fixed cache file path
         self.cache_path = "r1_a5_model_cache.pkl"
 
-        if not self.Unit_Test:
-            self.urdf_path = '../assets/r1/r1_a5.urdf'
-            self.model_dir = '../assets/r1/'
-        else:
-            self.urdf_path = '../../assets/r1/r1_a5.urdf'
-            self.model_dir = '../../assets/r1/'
+        self.urdf_path = str(ASSETS_DIR / "r1" / "r1_a5.urdf")
+        self.model_dir = str(ASSETS_DIR / "r1")
 
         # Try loading cache first
         if os.path.exists(self.cache_path) and (not self.Visualization):
@@ -1760,12 +1749,8 @@ class R1_A7_ArmIK:
         # fixed cache file path
         self.cache_path = "r1_a7_model_cache.pkl"
 
-        if not self.Unit_Test:
-            self.urdf_path = '../assets/r1/r1_a7.urdf'
-            self.model_dir = '../assets/r1/'
-        else:
-            self.urdf_path = '../../assets/r1/r1_a7.urdf'
-            self.model_dir = '../../assets/r1/'
+        self.urdf_path = str(ASSETS_DIR / "r1" / "r1_a7.urdf")
+        self.model_dir = str(ASSETS_DIR / "r1")
 
         # Try loading cache first
         if os.path.exists(self.cache_path) and (not self.Visualization):

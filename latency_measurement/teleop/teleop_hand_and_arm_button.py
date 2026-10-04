@@ -1,8 +1,8 @@
 import time
 import argparse
+import csv
+import json
 import os
-import secrets
-import socket
 import sys
 from pathlib import Path
 from multiprocessing import Value, Array, Lock
@@ -25,8 +25,6 @@ from teleop.utils.episode_writer import EpisodeWriter
 from teleop.utils.ipc import IPC_Server
 from teleop.utils.motion_switcher import MotionSwitcher, LocoClientWrapper
 from sshkeyboard import listen_keyboard, stop_listening
-from clock_sync import estimate_udp_clock_offset, load_browser_clock_offset
-from latency_protocol import PACKET_FORMAT, TimingPacket, pack_packet
 
 # for simulation
 from unitree_sdk2py.core.channel import ChannelPublisher
@@ -76,6 +74,19 @@ def get_state() -> dict:
         "RECORD_RUNNING": RECORD_RUNNING,
     }
 
+
+def load_browser_clock_offset(path: Path, max_age_seconds: float = 600.0):
+    """Load a recent browser-minus-XR clock calibration result."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    created_at_ns = int(data["created_at_ns"])
+    age_seconds = (time.time_ns() - created_at_ns) / 1_000_000_000
+    if age_seconds < -5 or age_seconds > max_age_seconds:
+        raise ValueError(
+            f"browser clock calibration is stale (age={age_seconds:.1f}s, "
+            f"max={max_age_seconds:.1f}s)"
+        )
+    return int(data["offset_ns"]), int(data["rtt_ns"])
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # basic control parameters
@@ -99,19 +110,22 @@ if __name__ == '__main__':
     parser.add_argument('--task-goal', type = str, default = 'pick up cube.', help = 'task goal for recording at json file')
     parser.add_argument('--task-desc', type = str, default = 'task description', help = 'task description for recording at json file')
     parser.add_argument('--task-steps', type = str, default = 'step1: do this; step2: do that;', help = 'task steps for recording at json file')
-    # button-bridge (UDP) parameters
-    parser.add_argument('--button-bridge-host', type=str, default='127.0.0.1', help='Robot/VPN IP running the timed UDP-to-ROS bridge')
-    parser.add_argument('--button-bridge-port', type=int, default=9870, help='UDP port to send controller button states to (ROS bridge)')
-    parser.add_argument('--button-bridge-disable', action='store_true', help='Disable sending controller button states over UDP')
-    parser.add_argument('--clock-sync-port', type=int, default=9871, help='Robot bridge UDP clock-sync port')
-    parser.add_argument('--clock-sync-samples', type=int, default=20, help='XR-to-robot startup clock-sync samples')
-    parser.add_argument('--clock-sync-timeout', type=float, default=0.25, help='Timeout per clock-sync sample in seconds')
-    parser.add_argument('--clock-sync-disable', action='store_true', help='Disable startup clock-offset estimation')
     parser.add_argument(
         '--browser-clock-offset-file',
         type=Path,
         default=Path(parent_dir) / 'runtime' / 'browser_clock_offset.json',
         help='Offset file produced by browser_clock_sync_server.py',
+    )
+    parser.add_argument(
+        '--input-latency-output',
+        type=Path,
+        default=None,
+        help='Local CSV for browser-to-XR input latency (default: latency_measurement/logs/xr_input_latency_TIMESTAMP.csv)',
+    )
+    parser.add_argument(
+        '--input-latency-log-disable',
+        action='store_true',
+        help='Disable local browser-to-XR latency CSV recording',
     )
 
     args = parser.parse_args()
@@ -120,6 +134,8 @@ if __name__ == '__main__':
     if args.ee == "dex1_internal" and args.motion:
         parser.error("--ee dex1_internal does not currently support --motion.")
 
+    arm_ctrl = None
+    input_latency_file = None
     try:
         # setup dds communication domains id
         if args.sim:
@@ -127,44 +143,49 @@ if __name__ == '__main__':
         else:
             ChannelFactoryInitialize(0, networkInterface=args.network_interface)
 
-        # ---- timed button UDP socket ----
-        button_sock = None
-        latency_session_id = secrets.randbits(63)
-        last_sent_controller_sequence = 0
+        last_logged_controller_sequence = 0
         browser_to_xr_offset_ns = 0
-        xr_to_robot_offset_ns = 0
-        if not args.button_bridge_disable:
+        browser_clock_valid = False
+        if args.input_mode == "controller":
             try:
-                if not args.clock_sync_disable:
-                    browser_clock = load_browser_clock_offset(args.browser_clock_offset_file)
-                    browser_to_xr_offset_ns = browser_clock.offset_ns
-                    logger_mp.info(
-                        f"browser -> XR clock offset: {browser_to_xr_offset_ns / 1e6:.3f} ms "
-                        f"(RTT {browser_clock.rtt_ns / 1e6:.3f} ms)"
-                    )
-
-                    robot_clock = estimate_udp_clock_offset(
-                        args.button_bridge_host,
-                        args.clock_sync_port,
-                        sample_count=args.clock_sync_samples,
-                        timeout_seconds=args.clock_sync_timeout,
-                    )
-                    xr_to_robot_offset_ns = robot_clock.offset_ns
-                    logger_mp.info(
-                        f"XR -> robot clock offset: {xr_to_robot_offset_ns / 1e6:.3f} ms "
-                        f"(RTT {robot_clock.rtt_ns / 1e6:.3f} ms, "
-                        f"samples {robot_clock.successful_samples})"
-                    )
-
-                button_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                button_sock.setblocking(False)
+                browser_to_xr_offset_ns, browser_rtt_ns = load_browser_clock_offset(
+                    args.browser_clock_offset_file
+                )
+                browser_clock_valid = True
                 logger_mp.info(
-                    f"timed button UDP -> {args.button_bridge_host}:{args.button_bridge_port} "
-                    f"(fmt={PACKET_FORMAT}, session={latency_session_id})"
+                    f"browser -> XR clock offset: {browser_to_xr_offset_ns / 1e6:.3f} ms "
+                    f"(RTT {browser_rtt_ns / 1e6:.3f} ms)"
                 )
             except Exception as e:
-                logger_mp.error(f"Failed to open button-bridge UDP socket: {e}")
-                button_sock = None
+                logger_mp.error(
+                    f"Browser clock calibration unavailable; corrected latency will be blank: {e}"
+                )
+
+        input_latency_writer = None
+        if args.input_mode == "controller" and not args.input_latency_log_disable:
+            output_path = args.input_latency_output
+            if output_path is None:
+                timestamp = time.strftime("%Y%m%d_%H%M%S")
+                output_path = Path(parent_dir) / "logs" / f"xr_input_latency_{timestamp}.csv"
+            elif not output_path.is_absolute():
+                # Interpret documented relative paths from the repository root,
+                # even when this script is launched inside latency_measurement/teleop.
+                output_path = Path(parent_dir).parent / output_path
+            output_path = output_path.expanduser().resolve()
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            input_latency_file = output_path.open("w", newline="", encoding="utf-8")
+            input_latency_writer = csv.DictWriter(
+                input_latency_file,
+                fieldnames=[
+                    "sequence", "browser_event_ns", "xr_receive_ns",
+                    "browser_to_xr_offset_ns", "clock_sync_valid",
+                    "browser_to_xr_raw_ms", "browser_to_xr_ms",
+                    "right_b", "left_y",
+                ],
+            )
+            input_latency_writer.writeheader()
+            input_latency_file.flush()
+            logger_mp.info(f"browser -> XR latency CSV: {output_path}")
 
         # ipc communication mode. client usage: see utils/ipc.py
         if args.ipc:
@@ -375,29 +396,31 @@ if __name__ == '__main__':
             # get xr's tele data
             tele_data = tv_wrapper.get_tele_data()
 
-            # Send each new browser CONTROLLER_MOVE event once. The timing/button
-            # snapshot was captured atomically in the copied TeleVuer package.
-            if (button_sock is not None
-                    and args.input_mode == "controller"
+            # Store each new browser CONTROLLER_MOVE event once. The browser-send
+            # and XR-receive timestamps were captured atomically by TeleVuer.
+            if (input_latency_writer is not None
                     and tele_data.controller_event_sequence > 0
-                    and tele_data.controller_event_sequence != last_sent_controller_sequence):
-                try:
-                    packet = TimingPacket(
-                        session_id=latency_session_id,
-                        sequence=tele_data.controller_event_sequence,
-                        browser_event_ns=tele_data.browser_event_ns,
-                        xr_receive_ns=tele_data.xr_receive_ns,
-                        xr_send_ns=time.time_ns(),
-                        browser_to_xr_offset_ns=browser_to_xr_offset_ns,
-                        xr_to_robot_offset_ns=xr_to_robot_offset_ns,
-                        right_b=tele_data.event_right_b,
-                        left_y=tele_data.event_left_y,
-                    )
-                    payload = pack_packet(packet)
-                    button_sock.sendto(payload, (args.button_bridge_host, args.button_bridge_port))
-                    last_sent_controller_sequence = tele_data.controller_event_sequence
-                except Exception as e:
-                    logger_mp.debug(f"button-bridge send failed: {e}")
+                    and tele_data.controller_event_sequence != last_logged_controller_sequence):
+                raw_ns = tele_data.xr_receive_ns - tele_data.browser_event_ns
+                corrected_ns = raw_ns - browser_to_xr_offset_ns
+                input_latency_writer.writerow({
+                    "sequence": tele_data.controller_event_sequence,
+                    "browser_event_ns": tele_data.browser_event_ns,
+                    "xr_receive_ns": tele_data.xr_receive_ns,
+                    "browser_to_xr_offset_ns": (
+                        browser_to_xr_offset_ns if browser_clock_valid else ""
+                    ),
+                    "clock_sync_valid": int(browser_clock_valid),
+                    "browser_to_xr_raw_ms": f"{raw_ns / 1e6:.6f}",
+                    "browser_to_xr_ms": (
+                        f"{corrected_ns / 1e6:.6f}" if browser_clock_valid else ""
+                    ),
+                    "right_b": int(tele_data.event_right_b),
+                    "left_y": int(tele_data.event_left_y),
+                })
+                input_latency_file.flush()
+                last_logged_controller_sequence = tele_data.controller_event_sequence
+
             if args.ee in ("dex3", "inspire_ftp", "inspire_dfx", "brainco")  and args.input_mode == "hand":
                 with left_hand_pos_array.get_lock():
                     left_hand_pos_array[:] = tele_data.left_hand_pos.flatten()
@@ -615,7 +638,8 @@ if __name__ == '__main__':
         logger_mp.error(traceback.format_exc())
     finally:
         try:
-            arm_ctrl.ctrl_dual_arm_go_home()
+            if arm_ctrl is not None:
+                arm_ctrl.ctrl_dual_arm_go_home()
         except Exception as e:
             logger_mp.error(f"Failed to ctrl_dual_arm_go_home: {e}")
         
@@ -629,10 +653,10 @@ if __name__ == '__main__':
             logger_mp.error(f"Failed to stop keyboard listener or ipc server: {e}")
         
         try:
-            if button_sock is not None:
-                button_sock.close()
+            if input_latency_file is not None:
+                input_latency_file.close()
         except Exception as e:
-            logger_mp.error(f"Failed to close button-bridge socket: {e}")
+            logger_mp.error(f"Failed to close input latency CSV: {e}")
 
         try:
             if img_client is not None:

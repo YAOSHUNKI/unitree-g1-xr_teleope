@@ -9,6 +9,37 @@ import os
 import time
 from pathlib import Path
 from typing import Literal
+import json
+
+from aiohttp.hdrs import UPGRADE
+from aiohttp.web_response import Response
+from vuer.base import websocket_handler
+
+
+class LatencyVuer(Vuer):
+    """Vuer server that injects the camera marker decoder into its web client."""
+
+    def __init__(self, *args, camera_origin: str = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._camera_latency_script = None
+        if camera_origin:
+            script_path = Path(__file__).resolve().with_name("camera_latency_client.js")
+            script = script_path.read_text(encoding="utf-8")
+            self._camera_latency_script = script.replace(
+                "__CAMERA_ORIGIN__", json.dumps(camera_origin.rstrip("/"))
+            )
+
+    async def socket_index(self, request):
+        if "websocket" == request.headers.get(UPGRADE, "").lower().strip():
+            return await websocket_handler(request, self.downlink)
+        index_path = Path(self.client_root) / "index.html"
+        html = index_path.read_text(encoding="utf-8")
+        if self._camera_latency_script:
+            html = html.replace(
+                "</head>",
+                f"<script>{self._camera_latency_script}</script></head>",
+            )
+        return Response(text=html, content_type="text/html")
 
 
 class TeleVuer:
@@ -89,7 +120,23 @@ class TeleVuer:
                     cert_file = cert_file or str(current_module_dir / "cert.pem")
                     key_file = key_file or str(current_module_dir / "key.pem")
 
-        self.vuer = Vuer(host='0.0.0.0', cert=cert_file, key=key_file, queries=dict(grid=False), queue_len=3)
+        camera_origin = None
+        if webrtc_url:
+            camera_origin = webrtc_url.rsplit("/", 1)[0]
+        self.vuer = LatencyVuer(
+            host='0.0.0.0',
+            cert=cert_file,
+            key=key_file,
+            queries=dict(grid=False),
+            queue_len=3,
+            camera_origin=camera_origin,
+        )
+        if camera_origin:
+            print(
+                "[Camera Latency] Same-Quest probe enabled for "
+                f"{camera_origin}. Open this XR PC's local Vuer page; "
+                "the hosted vuer.ai page does not contain the probe."
+            )
         self.vuer.add_handler("CAMERA_MOVE")(self.on_cam_move)
         if self.use_hand_tracking:
             self.vuer.add_handler("HAND_MOVE")(self.on_hand_move)
