@@ -113,16 +113,23 @@ if __name__ == '__main__':
         else:
             ChannelFactoryInitialize(0, networkInterface=args.network_interface)
 
-        # ---- button-bridge UDP socket (send B / Y button states to an external ROS bridge) ----
-        # Payload format (little-endian, 2 bytes total):
-        #   '<??' = right_ctrl_bButton (B), left_ctrl_bButton (Y, labeled Y on hardware)
+        # ---- button-bridge UDP socket (send ALL controller inputs to an external ROS bridge) ----
+        # Payload format (little-endian, 42 bytes total): '<10?8f'
+        #   bools  (10): L_trigger, L_squeeze, L_X(aButton), L_Y(bButton), L_thumbstick,
+        #                R_trigger, R_squeeze, R_A(aButton), R_B(bButton), R_thumbstick
+        #   floats  (8): L_trigger(0..1), L_squeeze(0..1), L_stick_x, L_stick_y,
+        #                R_trigger(0..1), R_squeeze(0..1), R_stick_x, R_stick_y
+        #   trigger value is normalized to 0.0 = released, 1.0 = fully pressed
+        #   (TeleData.ctrl_triggerValue is 10.0 -> 0.0, so (10 - v) / 10)
         button_sock = None
-        BUTTON_FMT = '<??'
+        BUTTON_FMT = '<10?8f'
+        def _trig01(v):
+            return min(max((10.0 - float(v)) / 10.0, 0.0), 1.0)
         if not args.button_bridge_disable:
             try:
                 button_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 button_sock.setblocking(False)
-                logger_mp.info(f"button-bridge UDP -> {args.button_bridge_host}:{args.button_bridge_port} (fmt={BUTTON_FMT} B,Y)")
+                logger_mp.info(f"button-bridge UDP -> {args.button_bridge_host}:{args.button_bridge_port} (fmt={BUTTON_FMT}, {struct.calcsize(BUTTON_FMT)} bytes, all buttons/triggers/sticks)")
             except Exception as e:
                 logger_mp.error(f"Failed to open button-bridge UDP socket: {e}")
                 button_sock = None
@@ -336,13 +343,31 @@ if __name__ == '__main__':
             # get xr's tele data
             tele_data = tv_wrapper.get_tele_data()
 
-            # ---- send B / Y button states over UDP (controller mode only) ----
+            # ---- send all controller inputs over UDP (controller mode only) ----
             if button_sock is not None and args.input_mode == "controller":
                 try:
                     payload = struct.pack(
                         BUTTON_FMT,
-                        bool(tele_data.right_ctrl_bButton),  # B (right)
-                        bool(tele_data.left_ctrl_bButton),   # Y (left; ctrl_bButton on left is labeled Y)
+                        # bools
+                        bool(tele_data.left_ctrl_trigger),
+                        bool(tele_data.left_ctrl_squeeze),
+                        bool(tele_data.left_ctrl_aButton),     # X
+                        bool(tele_data.left_ctrl_bButton),     # Y
+                        bool(tele_data.left_ctrl_thumbstick),
+                        bool(tele_data.right_ctrl_trigger),
+                        bool(tele_data.right_ctrl_squeeze),
+                        bool(tele_data.right_ctrl_aButton),    # A
+                        bool(tele_data.right_ctrl_bButton),    # B
+                        bool(tele_data.right_ctrl_thumbstick),
+                        # floats
+                        _trig01(tele_data.left_ctrl_triggerValue),
+                        float(tele_data.left_ctrl_squeezeValue),
+                        float(tele_data.left_ctrl_thumbstickValue[0]),
+                        float(tele_data.left_ctrl_thumbstickValue[1]),
+                        _trig01(tele_data.right_ctrl_triggerValue),
+                        float(tele_data.right_ctrl_squeezeValue),
+                        float(tele_data.right_ctrl_thumbstickValue[0]),
+                        float(tele_data.right_ctrl_thumbstickValue[1]),
                     )
                     button_sock.sendto(payload, (args.button_bridge_host, args.button_bridge_port))
                 except Exception as e:

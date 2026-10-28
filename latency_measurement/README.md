@@ -116,7 +116,7 @@ python3 latency_measurement/browser_clock_sync_server.py \
   --host 0.0.0.0 \
   --port 8013
 ```
-
+ｓ
 Questで次を開き、「同期完了」を確認します。
 
 ```text
@@ -142,6 +142,38 @@ https://ROBOT_IMAGE_IP:60001/latency-config
 ```
 
 `curl -k`は証明書検証を省略しますが、ブラウザの`fetch`は省略しません。そのため、ブラウザ側でも接続許可が必要です。
+
+### `/latency-config`が404になる場合
+
+次の応答は、60001番ポートへの接続には成功しているものの、計測機能を持たない元のimage serverまたは古い一時コピーが起動していることを示します。
+
+```text
+404: Not Found
+```
+
+XR PCから、最新版の計測用image serverをロボットPCへコピーします。
+
+```bash
+cd ~/xr_teleoperate
+
+scp \
+  latency_measurement/teleop/teleimager/src/teleimager/image_server.py \
+  unitree@ROBOT_IMAGE_IP:~/xr_teleoperate/latency_measurement/teleop/teleimager/src/teleimager/image_server.py
+```
+
+ロボットPCで起動中の画像サーバーを`Ctrl+C`で停止します。必要に応じてプロセスを確認します。
+
+```bash
+pgrep -af 'teleimager.image_server|teleimager-server'
+```
+
+以前作成した`$probe_dir`は再利用せず、「1. ロボットPCで計測用カメラサーバーを起動」の手順で一時コピーを新しく作成して起動します。その後、XR PCから再確認します。
+
+```bash
+curl -sk https://ROBOT_IMAGE_IP:60001/latency-config
+```
+
+正常時は`"enabled": true`を含むJSONが返ります。
 
 ## 4. XR PCで同時計測を開始
 

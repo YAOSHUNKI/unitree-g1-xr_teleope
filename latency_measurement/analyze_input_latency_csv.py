@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Summarize Quest browser-to-XR PC input latency CSV files."""
-
 from __future__ import annotations
 
 import argparse

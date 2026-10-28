@@ -34,6 +34,12 @@ except ImportError as exc:  # pragma: no cover - depends on the runtime environm
 INPUT_COLOR = "#2563EB"
 CAMERA_COLOR = "#EA580C"
 GRID_COLOR = "#D1D5DB"
+MISSING_CORRECTED_LATENCY_MESSAGE = (
+    "Input CSV has no synchronized browser_to_xr_ms values in the selected window. "
+    "Run browser_clock_sync_server.py, open port 8013 from the Quest immediately "
+    "before measurement, and record a new run. For trend inspection only, use "
+    "--input-latency-column browser_to_xr_raw_ms."
+)
 
 
 @dataclass(frozen=True)
@@ -222,7 +228,7 @@ def plot_timeline(
         [((sample.browser_ms - start_ms) / 1000, sample.latency_ms) for sample in camera_samples]
     )
     if not input_points:
-        raise SystemExit("Input CSV has no synchronized browser_to_xr_ms values in the selected window")
+        raise SystemExit(MISSING_CORRECTED_LATENCY_MESSAGE)
 
     figure, axes = plt.subplots(2, 1, figsize=(12, 7), sharex=True, constrained_layout=True)
     figure.suptitle(f"Latency timeline\nStart: {start_label}", fontsize=14, fontweight="bold")
@@ -378,7 +384,7 @@ def write_summary(
     input_values = [sample.latency_ms for sample in input_samples if sample.latency_ms is not None]
     camera_values = [sample.latency_ms for sample in camera_samples]
     if not input_values:
-        raise SystemExit("Input CSV has no synchronized browser_to_xr_ms values in the selected window")
+        raise SystemExit(MISSING_CORRECTED_LATENCY_MESSAGE)
 
     input_missing = estimated_input_missing(input_samples, expected_hz)
     input_consumer_missing, input_duplicates = sequence_counts(
@@ -518,7 +524,7 @@ def main() -> None:
     input_values = [sample.latency_ms for sample in input_samples if sample.latency_ms is not None]
     camera_values = [sample.latency_ms for sample in camera_samples]
     if not input_values:
-        raise SystemExit("Input CSV has no synchronized browser_to_xr_ms values in the selected window")
+        raise SystemExit(MISSING_CORRECTED_LATENCY_MESSAGE)
 
     outputs = {
         "timeline": output_dir / "latency_timeline.png",
